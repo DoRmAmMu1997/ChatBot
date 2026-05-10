@@ -9,10 +9,12 @@ dataset when Hugging Face datasets is installed.
 from __future__ import annotations
 
 import ast
+import json
 import os
 import random
 from dataclasses import dataclass
-from typing import List, Sequence, Tuple
+from pathlib import Path
+from typing import Dict, Iterable, List, Sequence, Tuple
 
 import torch
 from torch.utils.data import Dataset, random_split
@@ -22,6 +24,34 @@ from .tokenizer import BOS_TOKEN, BOT_TOKEN, EOS_TOKEN, PAD_TOKEN, USER_TOKEN
 
 # A DialogPair is one prompt and the next response in the conversation.
 DialogPair = Tuple[str, str]
+
+
+DATASET_RECIPES: Dict[str, Dict[str, str]] = {
+    "cornell": {
+        "type": "local",
+        "description": "Bundled Cornell Movie Dialogues adjacent turns.",
+    },
+    "dailydialog": {
+        "type": "huggingface",
+        "dataset": "OpenRL/daily_dialog",
+        "description": "Short daily-life conversations.",
+    },
+    "ultrachat": {
+        "type": "huggingface",
+        "dataset": "HuggingFaceH4/ultrachat_200k",
+        "description": "Instruction-style user/assistant chat data.",
+    },
+    "oasst1": {
+        "type": "huggingface",
+        "dataset": "OpenAssistant/oasst1",
+        "description": "OpenAssistant conversation tree prompt/assistant pairs.",
+    },
+    "dolly": {
+        "type": "huggingface",
+        "dataset": "databricks/databricks-dolly-15k",
+        "description": "Instruction, optional context, and response examples.",
+    },
+}
 
 
 @dataclass(frozen=True)
@@ -119,6 +149,111 @@ def load_dailydialog_pairs(
     return pairs
 
 
+def _load_hf_dataset(dataset_name: str, split: str):
+    """Import and load a Hugging Face dataset only when it is requested."""
+
+    try:
+        from datasets import load_dataset
+    except ImportError as exc:
+        raise ImportError(
+            "Hugging Face dataset loading needs the optional 'datasets' package. "
+            "Install requirements.txt or use --dataset cornell."
+        ) from exc
+
+    # Keeping this in a tiny helper means importing src.chatbot.data does not
+    # require downloading or even installing Hugging Face datasets.
+    return load_dataset(dataset_name, split=split)
+
+
+def pairs_from_messages(messages: Sequence[dict]) -> List[DialogPair]:
+    """Convert chat message dictionaries into user/assistant pairs."""
+
+    pairs: List[DialogPair] = []
+    for left, right in zip(messages, messages[1:]):
+        left_role = str(left.get("role", "")).lower()
+        right_role = str(right.get("role", "")).lower()
+
+        # Most chat datasets store a list like:
+        # [{"role": "user", "content": "..."}, {"role": "assistant", ...}]
+        # We only keep pairs where the direction is user -> assistant.
+        if left_role in {"user", "prompter"} and right_role in {"assistant", "bot"}:
+            prompt = str(left.get("content") or left.get("text") or "").strip()
+            response = str(right.get("content") or right.get("text") or "").strip()
+            if prompt and response:
+                pairs.append((prompt, response))
+    return pairs
+
+
+def load_ultrachat_pairs(
+    dataset_name: str = DATASET_RECIPES["ultrachat"]["dataset"],
+    split: str = "train_sft",
+    max_pairs: int | None = None,
+) -> List[DialogPair]:
+    """Load UltraChat user/assistant pairs from its messages column."""
+
+    dataset = _load_hf_dataset(dataset_name, split=split)
+    pairs: List[DialogPair] = []
+    for row in dataset:
+        for pair in pairs_from_messages(row.get("messages", [])):
+            pairs.append(pair)
+            if max_pairs is not None and len(pairs) >= max_pairs:
+                return pairs
+    return pairs
+
+
+def load_oasst1_pairs(
+    dataset_name: str = DATASET_RECIPES["oasst1"]["dataset"],
+    split: str = "train",
+    max_pairs: int | None = None,
+) -> List[DialogPair]:
+    """Load English OpenAssistant prompt/assistant pairs.
+
+    OASST1 is a conversation tree. Each assistant row points at its parent
+    prompt, so we build a lookup and pair assistant messages with their parent.
+    """
+
+    dataset = _load_hf_dataset(dataset_name, split=split)
+    rows = [row for row in dataset if row.get("lang") in {None, "en"}]
+    by_id = {row.get("message_id"): row for row in rows}
+    pairs: List[DialogPair] = []
+
+    for row in rows:
+        if row.get("role") != "assistant":
+            continue
+        parent = by_id.get(row.get("parent_id"))
+        if not parent or parent.get("role") not in {"prompter", "user"}:
+            continue
+        prompt = str(parent.get("text", "")).strip()
+        response = str(row.get("text", "")).strip()
+        if prompt and response:
+            pairs.append((prompt, response))
+            if max_pairs is not None and len(pairs) >= max_pairs:
+                return pairs
+    return pairs
+
+
+def load_dolly_pairs(
+    dataset_name: str = DATASET_RECIPES["dolly"]["dataset"],
+    split: str = "train",
+    max_pairs: int | None = None,
+) -> List[DialogPair]:
+    """Load Databricks Dolly instruction/response rows as dialog pairs."""
+
+    dataset = _load_hf_dataset(dataset_name, split=split)
+    pairs: List[DialogPair] = []
+    for row in dataset:
+        instruction = str(row.get("instruction", "")).strip()
+        context = str(row.get("context", "")).strip()
+        response = str(row.get("response", "")).strip()
+        if context:
+            instruction = f"{instruction}\n\nContext:\n{context}"
+        if instruction and response:
+            pairs.append((instruction, response))
+            if max_pairs is not None and len(pairs) >= max_pairs:
+                return pairs
+    return pairs
+
+
 def pair_to_training_text(pair: DialogPair) -> str:
     """Format one dialog pair as a single autoregressive training sequence.
 
@@ -140,18 +275,65 @@ def load_training_texts(
 ) -> List[str]:
     """Load dialog pairs and format them for language-model training."""
 
-    if dataset == "cornell":
-        pairs = load_cornell_pairs(corpus_dir, max_pairs=max_pairs)
-    elif dataset == "dailydialog":
-        pairs = load_dailydialog_pairs(
-            dataset_name=hf_dataset_name,
-            split=hf_split,
-            max_pairs=max_pairs,
-        )
-    else:
-        raise ValueError("dataset must be either 'cornell' or 'dailydialog'")
+    dataset_names = parse_dataset_names(dataset)
+    pairs: List[DialogPair] = []
+    for dataset_name in dataset_names:
+        # Every loader returns the same simple shape: (prompt, response). That
+        # common shape lets the training code stay independent of dataset quirks.
+        if dataset_name == "cornell":
+            pairs.extend(load_cornell_pairs(corpus_dir, max_pairs=max_pairs))
+        elif dataset_name == "dailydialog":
+            pairs.extend(
+                load_dailydialog_pairs(
+                    dataset_name=hf_dataset_name if dataset == "dailydialog" else DATASET_RECIPES["dailydialog"]["dataset"],
+                    split=hf_split,
+                    max_pairs=max_pairs,
+                )
+            )
+        elif dataset_name == "ultrachat":
+            pairs.extend(load_ultrachat_pairs(split=hf_split, max_pairs=max_pairs))
+        elif dataset_name == "oasst1":
+            pairs.extend(load_oasst1_pairs(split=hf_split, max_pairs=max_pairs))
+        elif dataset_name == "dolly":
+            pairs.extend(load_dolly_pairs(split=hf_split, max_pairs=max_pairs))
+        else:
+            raise ValueError(f"Unknown dataset: {dataset_name}")
 
     return [pair_to_training_text(pair) for pair in pairs]
+
+
+def parse_dataset_names(dataset: str) -> List[str]:
+    """Parse one dataset name, a comma-separated list, or ``mixed``."""
+
+    if dataset == "mixed":
+        return ["cornell", "dailydialog", "ultrachat", "oasst1", "dolly"]
+    names = [name.strip().lower() for name in dataset.split(",") if name.strip()]
+    return names or ["cornell"]
+
+
+def write_dataset_manifest(path: str | Path) -> None:
+    """Write dataset recipe metadata for readers and training scripts."""
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    # The manifest documents what data can be loaded without checking Python
+    # code. It is intentionally metadata only, not the full external datasets.
+    path.write_text(json.dumps(DATASET_RECIPES, indent=2), encoding="utf-8")
+
+
+def load_jsonl_pairs(path: str | Path) -> List[DialogPair]:
+    """Load local JSONL fixtures with ``prompt`` and ``response`` fields."""
+
+    pairs: List[DialogPair] = []
+    with open(path, "r", encoding="utf-8") as file:
+        for raw_line in file:
+            row = json.loads(raw_line)
+            prompt = str(row.get("prompt", "")).strip()
+            response = str(row.get("response", "")).strip()
+            if prompt and response:
+                pairs.append((prompt, response))
+    return pairs
 
 
 class ConversationDataset(Dataset):
@@ -213,6 +395,8 @@ def build_datasets(
     if train_size <= 0:
         raise ValueError("Need at least two examples to create a validation split.")
 
+    # A fixed generator seed makes the split repeatable. That is useful when
+    # comparing two training runs because they validate on the same examples.
     generator = torch.Generator().manual_seed(seed)
     train_dataset, valid_dataset = random_split(
         full_dataset,

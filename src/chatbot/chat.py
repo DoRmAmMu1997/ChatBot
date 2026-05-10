@@ -9,7 +9,7 @@ import torch
 
 from .config import ModelConfig
 from .model import TransformerChatModel
-from .tokenizer import BOT_TOKEN, BOS_TOKEN, EOS_TOKEN, USER_TOKEN, SimpleTokenizer
+from .tokenizer import BOT_TOKEN, BOS_TOKEN, EOS_TOKEN, USER_TOKEN, tokenizer_from_dict
 
 
 History = List[Tuple[str, str]]
@@ -26,7 +26,9 @@ def load_chatbot(checkpoint_path: str, cpu: bool = False):
     device = torch.device("cuda" if torch.cuda.is_available() and not cpu else "cpu")
     checkpoint = torch.load(checkpoint_path, map_location=device)
 
-    tokenizer = SimpleTokenizer.from_dict(checkpoint["tokenizer"])
+    # The checkpoint contains both the learned weights and the "recipe" needed
+    # to rebuild the model class before loading those weights.
+    tokenizer = tokenizer_from_dict(checkpoint["tokenizer"])
     config = ModelConfig.from_dict(checkpoint["model_config"])
     model = TransformerChatModel(config).to(device)
     model.load_state_dict(checkpoint["model_state"])
@@ -53,13 +55,17 @@ def build_prompt(message: str, history: History, max_history: int = 3) -> str:
 @torch.no_grad()
 def generate_reply(
     model: TransformerChatModel,
-    tokenizer: SimpleTokenizer,
+    tokenizer,
     message: str,
     device: torch.device,
     history: History | None = None,
     max_new_tokens: int = 48,
     temperature: float = 0.8,
     top_k: int | None = 50,
+    top_p: float | None = None,
+    do_sample: bool = True,
+    num_beams: int = 1,
+    repetition_penalty: float = 1.0,
 ) -> str:
     """Generate one response for a user message."""
 
@@ -69,6 +75,8 @@ def generate_reply(
     # If the prompt is longer than the model's context window, keep the most
     # recent tokens. Recent conversation is usually the most relevant context.
     prompt_ids = tokenizer.encode(prompt)[-model.config.block_size :]
+
+    # PyTorch models expect batches, so wrap the one prompt in a batch of size 1.
     input_ids = torch.tensor([prompt_ids], dtype=torch.long, device=device)
 
     output_ids = model.generate(
@@ -76,6 +84,10 @@ def generate_reply(
         max_new_tokens=max_new_tokens,
         temperature=temperature,
         top_k=top_k,
+        top_p=top_p,
+        do_sample=do_sample,
+        num_beams=num_beams,
+        repetition_penalty=repetition_penalty,
     )[0].tolist()
 
     new_ids = output_ids[len(prompt_ids) :]
@@ -104,11 +116,15 @@ def generate_reply(
 
 def chat_loop(
     model: TransformerChatModel,
-    tokenizer: SimpleTokenizer,
+    tokenizer,
     device: torch.device,
     max_new_tokens: int,
     temperature: float,
     top_k: int | None,
+    top_p: float | None,
+    do_sample: bool,
+    num_beams: int,
+    repetition_penalty: float,
 ) -> None:
     """Run a terminal chat loop until the user quits."""
 
@@ -119,6 +135,8 @@ def chat_loop(
         if message.lower() in {"q", "quit", "exit"}:
             break
 
+        # Keep the conversation history in memory so each next reply can see a
+        # few recent turns. This is not long-term memory; it is prompt context.
         reply = generate_reply(
             model=model,
             tokenizer=tokenizer,
@@ -128,6 +146,10 @@ def chat_loop(
             max_new_tokens=max_new_tokens,
             temperature=temperature,
             top_k=top_k,
+            top_p=top_p,
+            do_sample=do_sample,
+            num_beams=num_beams,
+            repetition_penalty=repetition_penalty,
         )
         history.append((message, reply))
         print(f"Bot: {reply}")
@@ -142,6 +164,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-new-tokens", type=int, default=48)
     parser.add_argument("--temperature", type=float, default=0.8)
     parser.add_argument("--top-k", type=int, default=50)
+    parser.add_argument("--top-p", type=float, default=None)
+    parser.add_argument("--num-beams", type=int, default=1)
+    parser.add_argument("--repetition-penalty", type=float, default=1.0)
+    parser.add_argument("--greedy", action="store_true", help="Disable sampling and always choose the highest-scoring token.")
     return parser
 
 
@@ -157,4 +183,8 @@ def main() -> None:
         max_new_tokens=args.max_new_tokens,
         temperature=args.temperature,
         top_k=args.top_k,
+        top_p=args.top_p,
+        do_sample=not args.greedy,
+        num_beams=args.num_beams,
+        repetition_penalty=args.repetition_penalty,
     )

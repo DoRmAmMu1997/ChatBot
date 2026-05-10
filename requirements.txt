@@ -1,4 +1,7 @@
 torch>=2.1
+tokenizers>=0.15
+PyYAML>=6.0
+pytest>=8.0
 
-# Optional: needed only when using --dataset dailydialog.
+# Optional: needed when using Hugging Face dataset recipes.
 datasets>=2.18
