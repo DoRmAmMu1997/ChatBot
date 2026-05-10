@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Training outputs can be large and should not be committed by accident.
+checkpoints/

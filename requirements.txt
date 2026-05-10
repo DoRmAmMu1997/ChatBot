@@ -1,0 +1,4 @@
+torch>=2.1
+
+# Optional: needed only when using --dataset dailydialog.
+datasets>=2.18
