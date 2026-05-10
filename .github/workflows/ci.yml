@@ -1,0 +1,35 @@
+name: Python CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - codex/chatbot-original-10b
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Compile Python files
+        run: python -m compileall chatbot.py chat_llm.py train_llm.py train_tokenizer.py train_10b.py src scripts
+
+      - name: Run tests
+        run: pytest -q
+
+      - name: Estimate 10B parameters
+        run: python scripts/estimate_params.py --config configs/chatbot-10b.yaml

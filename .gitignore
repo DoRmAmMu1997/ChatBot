@@ -5,3 +5,9 @@ venv/
 
 # Training outputs can be large and should not be committed by accident.
 checkpoints/
+adapters/
+tokenizers/
+runs/
+wandb/
+*.safetensors
+*.ckpt

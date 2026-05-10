@@ -1,0 +1,26 @@
+{
+  "cornell": {
+    "type": "local",
+    "description": "Bundled Cornell Movie Dialogues adjacent turns."
+  },
+  "dailydialog": {
+    "type": "huggingface",
+    "dataset": "OpenRL/daily_dialog",
+    "description": "Short daily-life conversations."
+  },
+  "ultrachat": {
+    "type": "huggingface",
+    "dataset": "HuggingFaceH4/ultrachat_200k",
+    "description": "Instruction-style user/assistant chat data."
+  },
+  "oasst1": {
+    "type": "huggingface",
+    "dataset": "OpenAssistant/oasst1",
+    "description": "OpenAssistant conversation tree prompt/assistant pairs."
+  },
+  "dolly": {
+    "type": "huggingface",
+    "dataset": "databricks/databricks-dolly-15k",
+    "description": "Instruction, optional context, and response examples."
+  }
+}

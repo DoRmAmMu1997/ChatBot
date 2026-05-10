@@ -1,15 +1,18 @@
-"""A tiny word-level tokenizer for the chatbot.
+"""Tokenizers for the chatbot.
 
-This project intentionally avoids a heavy tokenizer dependency. The tokenizer
-below is simple enough for beginners to read: it lowercases text, splits words
-and punctuation, and keeps a fixed vocabulary learned from the training data.
+The original project used only ``SimpleTokenizer`` because it is easy to read.
+That tokenizer stays available for beginners and tiny experiments. The 10B
+training path adds ``BPETokenizer``, a byte-pair encoding tokenizer like the
+subword tokenizers used by real LLM training pipelines.
 """
 
 from __future__ import annotations
 
+import json
 import re
 import unicodedata
 from collections import Counter
+from pathlib import Path
 from typing import Dict, Iterable, List, Sequence
 
 
@@ -133,7 +136,7 @@ class SimpleTokenizer:
     def to_dict(self) -> Dict[str, Dict[str, int]]:
         """Return a checkpoint-friendly representation."""
 
-        return {"token_to_id": self.token_to_id}
+        return {"kind": "simple", "token_to_id": self.token_to_id}
 
     @classmethod
     def from_dict(cls, data: Dict[str, Dict[str, int]]) -> "SimpleTokenizer":
@@ -146,3 +149,133 @@ def tokenize(text: str) -> List[str]:
     """Split text into tokens using the project regex."""
 
     return TOKEN_PATTERN.findall(normalize_text(text))
+
+
+class BPETokenizer:
+    """Byte-pair encoding tokenizer backed by Hugging Face ``tokenizers``.
+
+    BPE learns common chunks of text instead of whole words. That matters for a
+    large model because rare words, names, and typos can be represented as
+    smaller pieces instead of becoming one useless ``<unk>`` token.
+    """
+
+    kind = "bpe"
+
+    def __init__(self, tokenizer):
+        self.tokenizer = tokenizer
+        self._refresh_special_ids()
+
+    def _refresh_special_ids(self) -> None:
+        self.pad_id = self.tokenizer.token_to_id(PAD_TOKEN)
+        self.unk_id = self.tokenizer.token_to_id(UNK_TOKEN)
+        self.bos_id = self.tokenizer.token_to_id(BOS_TOKEN)
+        self.eos_id = self.tokenizer.token_to_id(EOS_TOKEN)
+        self.user_id = self.tokenizer.token_to_id(USER_TOKEN)
+        self.bot_id = self.tokenizer.token_to_id(BOT_TOKEN)
+
+    @property
+    def token_to_id(self) -> Dict[str, int]:
+        """Expose a simple mapping for code shared with ``SimpleTokenizer``."""
+
+        return self.tokenizer.get_vocab()
+
+    @property
+    def vocab_size(self) -> int:
+        return self.tokenizer.get_vocab_size()
+
+    @classmethod
+    def train(
+        cls,
+        texts: Iterable[str],
+        vocab_size: int = 32000,
+        min_frequency: int = 2,
+    ) -> "BPETokenizer":
+        """Train a BPE tokenizer from an iterator of text strings."""
+
+        try:
+            from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
+        except ImportError as exc:  # pragma: no cover - exercised by users
+            raise ImportError("BPE tokenization requires the 'tokenizers' package.") from exc
+
+        tokenizer = Tokenizer(models.BPE(unk_token=UNK_TOKEN))
+        tokenizer.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
+        tokenizer.decoder = decoders.ByteLevel()
+        trainer = trainers.BpeTrainer(
+            vocab_size=vocab_size,
+            min_frequency=min_frequency,
+            special_tokens=SPECIAL_TOKENS,
+        )
+        tokenizer.train_from_iterator(texts, trainer=trainer)
+        return cls(tokenizer)
+
+    def encode(self, text: str) -> List[int]:
+        return self.tokenizer.encode(text).ids
+
+    def decode(self, ids: Sequence[int], skip_special: bool = True) -> str:
+        return self.tokenizer.decode(list(map(int, ids)), skip_special_tokens=skip_special).strip()
+
+    def save(self, path: str | Path) -> None:
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.tokenizer.save(str(path))
+
+    @classmethod
+    def load(cls, path: str | Path) -> "BPETokenizer":
+        try:
+            from tokenizers import Tokenizer
+        except ImportError as exc:  # pragma: no cover - exercised by users
+            raise ImportError("Loading a BPE tokenizer requires the 'tokenizers' package.") from exc
+
+        return cls(Tokenizer.from_file(str(path)))
+
+    def to_dict(self) -> Dict[str, str]:
+        """Store the tokenizer JSON inside a checkpoint if needed."""
+
+        return {"kind": "bpe", "tokenizer_json": self.tokenizer.to_str()}
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, str]) -> "BPETokenizer":
+        try:
+            from tokenizers import Tokenizer
+        except ImportError as exc:  # pragma: no cover - exercised by users
+            raise ImportError("Loading a BPE tokenizer requires the 'tokenizers' package.") from exc
+
+        return cls(Tokenizer.from_str(data["tokenizer_json"]))
+
+
+def tokenizer_from_dict(data):
+    """Load either tokenizer type from checkpoint metadata."""
+
+    kind = data.get("kind", "simple")
+    if kind == "bpe":
+        return BPETokenizer.from_dict(data)
+    if kind == "simple":
+        return SimpleTokenizer.from_dict(data)
+    raise ValueError(f"Unknown tokenizer kind: {kind}")
+
+
+def tokenizer_metadata(tokenizer, tokenizer_path: str | None = None) -> Dict[str, str]:
+    """Return checkpoint metadata for a tokenizer.
+
+    When a tokenizer file path is supplied, we store the path for clarity and
+    also embed the tokenizer payload so the checkpoint remains self-contained.
+    """
+
+    data = tokenizer.to_dict()
+    if tokenizer_path:
+        data["path"] = tokenizer_path
+    return data
+
+
+def write_tokenizer_manifest(path: str | Path, tokenizer_path: str, vocab_size: int) -> None:
+    """Write a tiny JSON manifest describing a trained tokenizer."""
+
+    manifest = {
+        "kind": "bpe",
+        "tokenizer_path": tokenizer_path,
+        "vocab_size": vocab_size,
+        "special_tokens": SPECIAL_TOKENS,
+    }
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")

@@ -1,19 +1,28 @@
 # ChatBot
 
-ChatBot is a small LLM-style chatbot project built with PyTorch. It uses a
-decoder-only Transformer trained with next-token prediction, which is the same
-basic idea used by larger language models.
+ChatBot is an educational LLM project built with PyTorch. The repository now
+contains two related paths:
+
+- a tiny local model path for learning, tests, and CPU smoke runs
+- an original untrained `ChatBot-10B` architecture for real large-scale training
+
+The 10B model is not a fine-tune of Qwen, Gemma, DeepSeek, gpt-oss, or any other
+external model. Those projects are used only as architectural inspiration for
+modern decoder design choices such as RoPE, RMSNorm, SwiGLU, grouped-query
+attention, KV caching, tied embeddings, and bf16-friendly training.
 
 ## What changed
 
-- The model is a compact GPT-like Transformer.
-- Cornell Movie Dialogues still works as the default offline dataset.
-- DailyDialog is available as an optional cleaner conversational dataset when
-  the `datasets` package can download it from Hugging Face.
-- The project is modular: data loading, tokenization, modeling, training, and
-  chatting live in separate files.
-- Previous experimental artifacts were removed so the repository now points
-  clearly at the upgraded architecture.
+- Added an original dense `ChatBot-10B` config at about `9.999B` parameters.
+- Replaced the previous simple Transformer internals with modular decoder
+  blocks: RMSNorm, RoPE, grouped-query attention, SwiGLU, and tied LM head.
+- Added BPE tokenizer training through Hugging Face `tokenizers`.
+- Added validation perplexity, top-p sampling, greedy decoding, beam search, and
+  repetition penalty controls.
+- Added dataset recipes for Cornell, DailyDialog, UltraChat, OpenAssistant
+  OASST1, and Dolly 15k.
+- Added tests and GitHub Actions CI for the tiny model path and parameter-count
+  checks.
 
 ## Repository structure
 
@@ -22,183 +31,134 @@ basic idea used by larger language models.
 |-- chatbot.py
 |-- chat_llm.py
 |-- train_llm.py
-|-- requirements.txt
-|-- README.md
+|-- train_tokenizer.py
+|-- train_10b.py
+|-- configs/
+|   |-- chatbot-10b.yaml
+|   `-- chatbot-tiny.yaml
+|-- scripts/
+|   `-- estimate_params.py
 |-- data/
-|   |-- cornell movie-dialogs corpus/
-|   |   |-- movie_lines.txt
-|   |   |-- movie_conversations.txt
-|   |   |-- movie_titles_metadata.txt
-|   |   |-- movie_characters_metadata.txt
-|   |   |-- raw_script_urls.txt
-|   |   |-- chameleons.pdf
-|   |   `-- README.txt
+|   |-- dataset_manifest.json
+|   `-- cornell movie-dialogs corpus/
+|-- tests/
+|   |-- fixtures/
+|   `-- test_*.py
 `-- src/
     `-- chatbot/
-        |-- __init__.py
         |-- chat.py
         |-- config.py
         |-- data.py
         |-- model.py
         |-- tokenizer.py
-        `-- train.py
+        |-- tokenizer_train.py
+        |-- train.py
+        `-- train_10b.py
 ```
 
-### Top-level scripts
+## Model notes
 
-`train_llm.py` starts training. It is intentionally tiny because the real
-training logic lives in `src/chatbot/train.py`.
-
-`chatbot.py` and `chat_llm.py` both start an interactive chat session from a
-trained checkpoint. `chatbot.py` is kept as the familiar main entrypoint.
-
-### `src/chatbot/config.py`
-
-Contains the `ModelConfig` dataclass. This stores model size settings such as
-embedding size, number of Transformer layers, number of attention heads, and
-maximum context length.
-
-### `src/chatbot/data.py`
-
-Loads training examples.
-
-- `load_cornell_pairs()` reads Cornell files already stored under `data/`.
-- `load_dailydialog_pairs()` optionally downloads DailyDialog through Hugging
-  Face datasets.
-- `ConversationDataset` converts text into `(input_tokens, target_tokens)` pairs
-  for next-token prediction.
-
-### `src/chatbot/tokenizer.py`
-
-Implements a small word-level tokenizer. It lowercases text, separates words and
-punctuation, keeps special tokens like `<user>` and `<bot>`, and maps uncommon
-words to `<unk>`.
-
-This is simpler than a production BPE tokenizer, but it keeps the project easy
-to understand and removes the need for extra tokenizer files.
-
-### `src/chatbot/model.py`
-
-Defines `TransformerChatModel`, the new small LLM. It uses:
-
-- token embeddings
-- positional embeddings
-- causal self-attention through Transformer encoder layers
-- a language-model head that predicts the next token
-
-The causal mask is what makes it LLM-like: each token can only look backward at
-earlier tokens, never forward at the answer it is supposed to predict.
-
-### `src/chatbot/train.py`
-
-Handles the full training loop:
-
-- reads the selected dataset
-- builds the tokenizer
-- creates train/validation splits
-- trains the Transformer
-- saves a checkpoint containing model weights, tokenizer vocabulary, config, and
-  basic metrics
-
-### `src/chatbot/chat.py`
-
-Loads a checkpoint and runs terminal inference. User messages are formatted as:
+`configs/chatbot-10b.yaml` defines the original 10B blueprint:
 
 ```text
-<bos> <user> your message <bot>
+vocab_size: 128000
+n_layer: 36
+n_embd: 5120
+n_head: 40
+n_kv_head: 8
+ffn_hidden_size: 12800
+block_size: 4096
 ```
 
-The model then generates the bot side until it reaches a stop token or the
-maximum response length.
+With tied input/output embeddings, this reports about `9.999B` parameters:
+
+```powershell
+python scripts/estimate_params.py --config configs/chatbot-10b.yaml
+```
+
+Do not commit 10B checkpoints, random initialized weights, adapters, tokenizer
+outputs, or training runs. They are intentionally ignored by `.gitignore`.
 
 ## Setup
-
-Create and activate a virtual environment if you want one, then install the
-dependencies:
 
 ```powershell
 pip install -r requirements.txt
 ```
 
-`torch` is required. `datasets` is only required for DailyDialog.
+For full 10B training, use a Linux multi-GPU environment with recent PyTorch,
+bf16-capable GPUs, and a distributed training launcher such as FSDP or DeepSpeed.
+This repository provides the model and data pipeline, but ordinary laptops are
+not expected to train the 10B config.
 
-## Training
+## Tiny local training
 
-Train on the bundled Cornell Movie Dialogues data:
-
-```powershell
-python train_llm.py --dataset cornell --steps 2000
-```
-
-For a quick CPU smoke run:
+Use the tiny config to verify the code path on CPU:
 
 ```powershell
-python train_llm.py --dataset cornell --max-pairs 256 --steps 5 --batch-size 16 --cpu
+python train_llm.py --dataset cornell --max-pairs 64 --steps 5 --batch-size 4 --config configs/chatbot-tiny.yaml --cpu
 ```
 
-Train with the optional DailyDialog dataset:
+The checkpoint stores model config, tokenizer metadata, train args, metrics, and
+model weights.
+
+## BPE tokenizer
+
+Train a BPE tokenizer from the configured data mix:
 
 ```powershell
-python train_llm.py --dataset dailydialog --steps 2000
+python train_tokenizer.py --dataset mixed --max-pairs 50000 --vocab-size 128000 --output tokenizers/chatbot-bpe.json
 ```
 
-Useful knobs:
+For tiny experiments, lower `--vocab-size` and `--max-pairs`.
 
-- `--max-pairs`: limit examples for experiments
-- `--block-size`: maximum token context length
-- `--n-layer`: number of Transformer layers
-- `--n-head`: number of attention heads
-- `--n-embd`: embedding size
-- `--steps`: number of optimizer steps
-- `--batch-size`: training batch size
+## ChatBot-10B training
 
-The default checkpoint path is:
-
-```text
-checkpoints/chatbot-small-llm.pt
-```
-
-## Chatting
-
-After training, start a chat session:
+After creating a BPE tokenizer, launch training with the 10B config:
 
 ```powershell
-python chatbot.py --checkpoint checkpoints/chatbot-small-llm.pt
+python train_10b.py --config configs/chatbot-10b.yaml --tokenizer bpe --tokenizer-path tokenizers/chatbot-bpe.json --dataset mixed
 ```
 
-You can also use:
-
-```powershell
-python chat_llm.py --checkpoint checkpoints/chatbot-small-llm.pt
-```
-
-Type `quit`, `q`, or `exit` to stop.
+For real training, run the same entrypoint through your distributed launcher and
+set batch size, gradient accumulation, precision, checkpointing, and output
+locations for the target cluster. The full datasets are downloaded during
+training; they are not stored in this repository.
 
 ## Dataset notes
 
-Cornell Movie Dialogues is large and already present in this repository, so it
-is the most reliable default. It contains movie dialogue, which can be dramatic,
-noisy, or old-fashioned.
+The repo keeps Cornell Movie Dialogues bundled for offline experiments. The
+other recipes are downloaded through Hugging Face `datasets` when requested:
 
-DailyDialog is usually better for simple everyday conversation because it is
-made of short multi-turn daily-life dialogues. It is optional because it needs
-an internet download and the Hugging Face `datasets` package.
+- `OpenRL/daily_dialog`
+- `HuggingFaceH4/ultrachat_200k`
+- `OpenAssistant/oasst1`
+- `databricks/databricks-dolly-15k`
 
-## Model notes
+Always review each dataset license and terms before training or publishing
+weights. The test suite uses tiny synthetic fixtures, not full external data.
 
-This is a small educational LLM, not a production assistant. It learns from the
-dataset you train it on and does not include instruction tuning, safety tuning,
-retrieval, or external knowledge. Better responses usually require:
+## Chatting
 
-- more training steps
-- a cleaner dataset
-- a larger model
-- a subword tokenizer
-- validation examples that match the chat style you want
+After training a checkpoint:
 
-## Suggested next upgrades
+```powershell
+python chatbot.py --checkpoint checkpoints/chatbot-small-llm.pt --temperature 0.8 --top-p 0.9
+```
 
-- Add a byte-pair encoding tokenizer for better handling of rare words.
-- Add perplexity tracking over a held-out validation file.
-- Add beam search or nucleus sampling controls for inference.
-- Add a small test suite for data loading, tokenization, and checkpoint loading.
+Useful inference controls:
+
+- `--greedy`: always choose the highest-scoring token
+- `--top-k`: keep only the top k tokens before sampling
+- `--top-p`: nucleus sampling threshold
+- `--num-beams`: beam search width
+- `--repetition-penalty`: reduce repeated tokens
+
+## Tests
+
+```powershell
+python -m compileall chatbot.py chat_llm.py train_llm.py train_tokenizer.py train_10b.py src scripts
+pytest
+python scripts/estimate_params.py --config configs/chatbot-10b.yaml
+```
+
+CI runs these checks on Python 3.11 and verifies the tiny CPU training path.

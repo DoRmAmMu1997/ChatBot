@@ -1,10 +1,12 @@
-"""Training loop for the small Transformer chatbot."""
+"""Training loop for the original Transformer chatbot family."""
 
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import random
+from pathlib import Path
 from typing import Dict
 
 import torch
@@ -14,7 +16,7 @@ from torch.utils.data import DataLoader
 from .config import ModelConfig
 from .data import build_datasets, load_training_texts
 from .model import TransformerChatModel
-from .tokenizer import SimpleTokenizer
+from .tokenizer import BPETokenizer, SimpleTokenizer, tokenizer_metadata
 
 
 def set_seed(seed: int) -> None:
@@ -60,10 +62,20 @@ def estimate_loss(
     return sum(losses) / max(len(losses), 1)
 
 
+def loss_to_perplexity(loss: float) -> float:
+    """Convert cross-entropy loss into perplexity.
+
+    Perplexity is roughly "how many choices the model feels confused between."
+    Lower is better. We cap the exponent to avoid overflow on broken runs.
+    """
+
+    return math.exp(min(loss, 20.0))
+
+
 def save_checkpoint(
     checkpoint_path: str,
     model: TransformerChatModel,
-    tokenizer: SimpleTokenizer,
+    tokenizer,
     args: argparse.Namespace,
     metrics: Dict[str, float],
 ) -> None:
@@ -79,11 +91,56 @@ def save_checkpoint(
         {
             "model_config": model.config.to_dict(),
             "model_state": model.state_dict(),
-            "tokenizer": tokenizer.to_dict(),
+            "tokenizer": tokenizer_metadata(tokenizer, getattr(args, "tokenizer_path", None)),
             "train_args": vars(args),
             "metrics": metrics,
         },
         checkpoint_path,
+    )
+
+
+def build_tokenizer(args: argparse.Namespace, texts):
+    """Create or load the tokenizer selected by CLI args."""
+
+    if args.tokenizer == "bpe":
+        if args.tokenizer_path and os.path.exists(args.tokenizer_path):
+            return BPETokenizer.load(args.tokenizer_path)
+        tokenizer = BPETokenizer.train(
+            texts,
+            vocab_size=args.max_vocab_size,
+            min_frequency=args.min_freq,
+        )
+        if args.tokenizer_path:
+            tokenizer.save(args.tokenizer_path)
+        return tokenizer
+
+    return SimpleTokenizer.build(
+        texts,
+        max_vocab_size=args.max_vocab_size,
+        min_freq=args.min_freq,
+    )
+
+
+def build_model_config(args: argparse.Namespace, tokenizer) -> ModelConfig:
+    """Build the model config from a YAML file or classic CLI knobs."""
+
+    if args.config:
+        config = ModelConfig.from_yaml_file(args.config)
+        config.vocab_size = tokenizer.vocab_size
+        config.pad_token_id = tokenizer.pad_id
+        return config
+
+    return ModelConfig(
+        vocab_size=tokenizer.vocab_size,
+        block_size=args.block_size,
+        n_embd=args.n_embd,
+        n_head=args.n_head,
+        n_kv_head=args.n_kv_head,
+        n_layer=args.n_layer,
+        ffn_hidden_size=args.ffn_hidden_size,
+        dropout=args.dropout,
+        attention_dropout=args.attention_dropout,
+        pad_token_id=tokenizer.pad_id,
     )
 
 
@@ -115,33 +172,25 @@ def train(args: argparse.Namespace) -> str:
         raise ValueError("No training texts were loaded.")
     print(f"Loaded {len(texts):,} conversation pairs from {args.dataset}.")
 
-    # The tokenizer decides which words/punctuation become known vocabulary.
-    # Tokens outside the vocabulary become <unk>, which keeps the model small.
-    tokenizer = SimpleTokenizer.build(
-        texts,
-        max_vocab_size=args.max_vocab_size,
-        min_freq=args.min_freq,
-    )
+    if args.config and args.tokenizer == "bpe" and not args.tokenizer_path:
+        config_vocab_size = ModelConfig.from_yaml_file(args.config).vocab_size
+        args.max_vocab_size = config_vocab_size
+
+    # The tokenizer decides which text chunks become known vocabulary. The
+    # simple tokenizer is readable; BPE is the serious path for larger models.
+    tokenizer = build_tokenizer(args, texts)
     print(f"Vocabulary size: {tokenizer.vocab_size:,}")
 
-    # These settings define the model size. Increasing them usually improves
-    # capacity but also makes training slower and more memory-heavy.
-    model_config = ModelConfig(
-        vocab_size=tokenizer.vocab_size,
-        block_size=args.block_size,
-        n_embd=args.n_embd,
-        n_head=args.n_head,
-        n_layer=args.n_layer,
-        dropout=args.dropout,
-        pad_token_id=tokenizer.pad_id,
-    )
+    # These settings define the model size. For 10B training they usually come
+    # from configs/chatbot-10b.yaml instead of individual CLI flags.
+    model_config = build_model_config(args, tokenizer)
 
     # build_datasets creates x/y token pairs. x is the prompt tokens and y is
     # the same sequence shifted left, so y contains the next-token answers.
     datasets = build_datasets(
         texts,
         tokenizer,
-        block_size=args.block_size,
+        block_size=model_config.block_size,
         valid_fraction=args.valid_fraction,
         seed=args.seed,
     )
@@ -190,18 +239,28 @@ def train(args: argparse.Namespace) -> str:
 
             if step % args.eval_every == 0 or step == args.steps:
                 valid_loss = estimate_loss(model, valid_loader, device)
-                print(f"step {step:>5}/{args.steps} | valid loss {valid_loss:.4f}")
+                valid_ppl = loss_to_perplexity(valid_loss)
+                print(
+                    f"step {step:>5}/{args.steps} | valid loss {valid_loss:.4f} "
+                    f"| valid ppl {valid_ppl:.2f}"
+                )
 
             if step >= args.steps:
                 break
 
     checkpoint_path = os.path.join(args.output_dir, args.checkpoint_name)
+    final_valid_loss = estimate_loss(model, valid_loader, device)
     save_checkpoint(
         checkpoint_path,
         model,
         tokenizer,
         args,
-        metrics={"train_loss": last_train_loss, "valid_loss": estimate_loss(model, valid_loader, device)},
+        metrics={
+            "train_loss": last_train_loss,
+            "train_perplexity": loss_to_perplexity(last_train_loss),
+            "valid_loss": final_valid_loss,
+            "valid_perplexity": loss_to_perplexity(final_valid_loss),
+        },
     )
     print(f"Saved checkpoint to {checkpoint_path}")
     return checkpoint_path
@@ -210,23 +269,33 @@ def train(args: argparse.Namespace) -> str:
 def build_arg_parser() -> argparse.ArgumentParser:
     """Create the training CLI."""
 
-    parser = argparse.ArgumentParser(description="Train a small Transformer chatbot.")
-    parser.add_argument("--dataset", choices=["cornell", "dailydialog"], default="cornell")
+    parser = argparse.ArgumentParser(description="Train the original ChatBot decoder model.")
+    parser.add_argument(
+        "--dataset",
+        default="cornell",
+        help="Dataset name, comma-separated names, or 'mixed'. Options include cornell, dailydialog, ultrachat, oasst1, dolly.",
+    )
     parser.add_argument("--corpus-dir", default=os.path.join("data", "cornell movie-dialogs corpus"))
     parser.add_argument("--hf-dataset", default="OpenRL/daily_dialog")
     parser.add_argument("--hf-split", default="train")
     parser.add_argument("--max-pairs", type=int, default=None)
 
+    parser.add_argument("--config", default=None, help="Optional YAML model config.")
     parser.add_argument("--output-dir", default="checkpoints")
     parser.add_argument("--checkpoint-name", default="chatbot-small-llm.pt")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--cpu", action="store_true", help="Force CPU training even if CUDA is available.")
 
+    parser.add_argument("--tokenizer", choices=["simple", "bpe"], default="simple")
+    parser.add_argument("--tokenizer-path", default=None)
     parser.add_argument("--block-size", type=int, default=96)
     parser.add_argument("--n-embd", type=int, default=128)
     parser.add_argument("--n-head", type=int, default=4)
+    parser.add_argument("--n-kv-head", type=int, default=None)
     parser.add_argument("--n-layer", type=int, default=4)
+    parser.add_argument("--ffn-hidden-size", type=int, default=None)
     parser.add_argument("--dropout", type=float, default=0.1)
+    parser.add_argument("--attention-dropout", type=float, default=0.1)
     parser.add_argument("--max-vocab-size", type=int, default=12000)
     parser.add_argument("--min-freq", type=int, default=2)
 
