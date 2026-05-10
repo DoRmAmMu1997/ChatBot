@@ -43,8 +43,13 @@ TOKEN_PATTERN = re.compile(r"<[^>\s]+>|[a-zA-Z]+(?:'[a-z]+)?|[0-9]+|[^\s\w]")
 def normalize_text(text: str) -> str:
     """Convert text into a clean, lowercase ASCII form."""
 
+    # NFKD separates accents from letters. The ASCII encode/decode step then
+    # drops those accents so accented and unaccented words behave consistently.
     ascii_text = unicodedata.normalize("NFKD", text)
     ascii_text = ascii_text.encode("ascii", "ignore").decode("ascii")
+
+    # Lowercasing keeps the beginner tokenizer small: "Hello" and "hello"
+    # become the same token instead of two separate vocabulary entries.
     ascii_text = ascii_text.lower().strip()
     return re.sub(r"\s+", " ", ascii_text)
 
@@ -166,6 +171,8 @@ class BPETokenizer:
         self._refresh_special_ids()
 
     def _refresh_special_ids(self) -> None:
+        # Store special token ids as attributes so the chat code can stop on
+        # <eos>, ignore <pad>, and recognize speaker markers quickly.
         self.pad_id = self.tokenizer.token_to_id(PAD_TOKEN)
         self.unk_id = self.tokenizer.token_to_id(UNK_TOKEN)
         self.bos_id = self.tokenizer.token_to_id(BOS_TOKEN)
@@ -181,6 +188,8 @@ class BPETokenizer:
 
     @property
     def vocab_size(self) -> int:
+        """Number of BPE tokens available to the model."""
+
         return self.tokenizer.get_vocab_size()
 
     @classmethod
@@ -197,9 +206,17 @@ class BPETokenizer:
         except ImportError as exc:  # pragma: no cover - exercised by users
             raise ImportError("BPE tokenization requires the 'tokenizers' package.") from exc
 
+        # The BPE model starts with bytes and repeatedly learns useful merges
+        # like "ing" or common word pieces from the training corpus.
         tokenizer = Tokenizer(models.BPE(unk_token=UNK_TOKEN))
+
+        # ByteLevel keeps the tokenizer robust: any text can be represented,
+        # even if it contains unusual characters or rare names.
         tokenizer.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
         tokenizer.decoder = decoders.ByteLevel()
+
+        # The trainer decides vocabulary size and guarantees our special tokens
+        # are present before normal learned tokens.
         trainer = trainers.BpeTrainer(
             vocab_size=vocab_size,
             min_frequency=min_frequency,
@@ -209,12 +226,18 @@ class BPETokenizer:
         return cls(tokenizer)
 
     def encode(self, text: str) -> List[int]:
+        """Turn text into BPE token ids."""
+
         return self.tokenizer.encode(text).ids
 
     def decode(self, ids: Sequence[int], skip_special: bool = True) -> str:
+        """Turn BPE token ids back into text."""
+
         return self.tokenizer.decode(list(map(int, ids)), skip_special_tokens=skip_special).strip()
 
     def save(self, path: str | Path) -> None:
+        """Save the tokenizer JSON that future model runs must reuse."""
+
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         self.tokenizer.save(str(path))
@@ -247,6 +270,9 @@ def tokenizer_from_dict(data):
     """Load either tokenizer type from checkpoint metadata."""
 
     kind = data.get("kind", "simple")
+
+    # Checkpoints can come from older simple-tokenizer runs or newer BPE runs.
+    # Dispatching here keeps chat.py independent of tokenizer details.
     if kind == "bpe":
         return BPETokenizer.from_dict(data)
     if kind == "simple":

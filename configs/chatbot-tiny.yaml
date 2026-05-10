@@ -1,13 +1,27 @@
+# Tiny preset for tests and laptop smoke runs. It uses the same architecture as
+# ChatBot-10B, but with very small dimensions so it can run on CPU.
 model_name: chatbot-tiny
+
+# Keep the vocabulary small for fixtures and quick tests.
 vocab_size: 128
+
+# A short context window keeps training examples and tests fast.
 block_size: 32
+
+# Small hidden width, head count, and layer count make this model lightweight.
 n_embd: 64
 n_head: 4
 n_kv_head: 2
 n_layer: 2
+
+# The feed-forward layer still uses SwiGLU, just at tiny scale.
 ffn_hidden_size: 128
+
+# Dropout is disabled so tests are deterministic.
 dropout: 0.0
 attention_dropout: 0.0
+
+# These values mirror the main config style but stay cheap to execute.
 rope_theta: 10000.0
 norm_eps: 0.00001
 initializer_range: 0.02

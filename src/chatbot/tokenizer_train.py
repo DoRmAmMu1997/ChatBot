@@ -11,6 +11,9 @@ from .tokenizer import BPETokenizer, write_tokenizer_manifest
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Train a BPE tokenizer for ChatBot.")
+
+    # Dataset flags match train.py so the tokenizer can be trained on the same
+    # text distribution the model will later learn from.
     parser.add_argument("--dataset", default="mixed")
     parser.add_argument("--corpus-dir", default=os.path.join("data", "cornell movie-dialogs corpus"))
     parser.add_argument("--hf-dataset", default="OpenRL/daily_dialog")
@@ -25,6 +28,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_arg_parser().parse_args()
+
+    # First collect formatted conversation strings such as:
+    # <bos> <user> hello <bot> hi <eos>
     texts = load_training_texts(
         dataset=args.dataset,
         corpus_dir=args.corpus_dir,
@@ -32,6 +38,9 @@ def main() -> None:
         hf_dataset_name=args.hf_dataset,
         hf_split=args.hf_split,
     )
+
+    # Then learn subword pieces from those strings and save the tokenizer for
+    # training/inference. The model and tokenizer must stay paired.
     tokenizer = BPETokenizer.train(
         texts,
         vocab_size=args.vocab_size,

@@ -104,16 +104,23 @@ def build_tokenizer(args: argparse.Namespace, texts):
 
     if args.tokenizer == "bpe":
         if args.tokenizer_path and os.path.exists(args.tokenizer_path):
+            # Reusing an existing tokenizer keeps token ids stable across runs.
+            # Stable ids matter because saved model weights line up with ids.
             return BPETokenizer.load(args.tokenizer_path)
+
+        # If no tokenizer file exists yet, learn one from the training text.
         tokenizer = BPETokenizer.train(
             texts,
             vocab_size=args.max_vocab_size,
             min_frequency=args.min_freq,
         )
         if args.tokenizer_path:
+            # Saving lets a later 10B training run use the exact same vocabulary.
             tokenizer.save(args.tokenizer_path)
         return tokenizer
 
+    # The simple tokenizer is intentionally easy to inspect, so it remains the
+    # default for beginner-friendly CPU experiments.
     return SimpleTokenizer.build(
         texts,
         max_vocab_size=args.max_vocab_size,
@@ -126,6 +133,9 @@ def build_model_config(args: argparse.Namespace, tokenizer) -> ModelConfig:
 
     if args.config:
         config = ModelConfig.from_yaml_file(args.config)
+
+        # The tokenizer may produce a smaller vocabulary than the YAML target
+        # during tests, so the model must match the tokenizer actually in use.
         config.vocab_size = tokenizer.vocab_size
         config.pad_token_id = tokenizer.pad_id
         return config
@@ -156,6 +166,9 @@ def train(args: argparse.Namespace) -> str:
     """
 
     set_seed(args.seed)
+
+    # CUDA means an NVIDIA GPU is available. CPU mode is useful for tiny smoke
+    # tests, but the 10B config requires serious multi-GPU hardware.
     device = torch.device("cuda" if torch.cuda.is_available() and not args.cpu else "cpu")
     print(f"Using device: {device}")
 
@@ -174,6 +187,9 @@ def train(args: argparse.Namespace) -> str:
 
     if args.config and args.tokenizer == "bpe" and not args.tokenizer_path:
         config_vocab_size = ModelConfig.from_yaml_file(args.config).vocab_size
+
+        # For a large model config, train the tokenizer to the same vocabulary
+        # size unless the user chose an explicit tokenizer file.
         args.max_vocab_size = config_vocab_size
 
     # The tokenizer decides which text chunks become known vocabulary. The
@@ -207,6 +223,8 @@ def train(args: argparse.Namespace) -> str:
         num_workers=0,
     )
 
+    # At this point the model has random weights. It only becomes useful after
+    # the training loop below updates those weights many times.
     model = TransformerChatModel(model_config).to(device)
 
     # AdamW is a common optimizer for Transformers. It updates model weights
@@ -217,6 +235,8 @@ def train(args: argparse.Namespace) -> str:
     step = 0
     last_train_loss = 0.0
     while step < args.steps:
+        # One epoch means one full pass over train_loader. This loop keeps
+        # cycling through epochs until the requested number of steps is reached.
         for x, y in train_loader:
             step += 1
             x = x.to(device)
@@ -238,6 +258,8 @@ def train(args: argparse.Namespace) -> str:
                 print(f"step {step:>5}/{args.steps} | train loss {last_train_loss:.4f}")
 
             if step % args.eval_every == 0 or step == args.steps:
+                # Validation is slower than logging training loss, so it runs
+                # less often. It is the better signal for model quality.
                 valid_loss = estimate_loss(model, valid_loader, device)
                 valid_ppl = loss_to_perplexity(valid_loss)
                 print(
@@ -250,6 +272,10 @@ def train(args: argparse.Namespace) -> str:
 
     checkpoint_path = os.path.join(args.output_dir, args.checkpoint_name)
     final_valid_loss = estimate_loss(model, valid_loader, device)
+
+    # The checkpoint is deliberately a single portable file for small runs.
+    # For real 10B training, large external checkpoint formats should be used
+    # outside git instead of committing weights.
     save_checkpoint(
         checkpoint_path,
         model,

@@ -159,6 +159,9 @@ def _load_hf_dataset(dataset_name: str, split: str):
             "Hugging Face dataset loading needs the optional 'datasets' package. "
             "Install requirements.txt or use --dataset cornell."
         ) from exc
+
+    # Keeping this in a tiny helper means importing src.chatbot.data does not
+    # require downloading or even installing Hugging Face datasets.
     return load_dataset(dataset_name, split=split)
 
 
@@ -169,6 +172,10 @@ def pairs_from_messages(messages: Sequence[dict]) -> List[DialogPair]:
     for left, right in zip(messages, messages[1:]):
         left_role = str(left.get("role", "")).lower()
         right_role = str(right.get("role", "")).lower()
+
+        # Most chat datasets store a list like:
+        # [{"role": "user", "content": "..."}, {"role": "assistant", ...}]
+        # We only keep pairs where the direction is user -> assistant.
         if left_role in {"user", "prompter"} and right_role in {"assistant", "bot"}:
             prompt = str(left.get("content") or left.get("text") or "").strip()
             response = str(right.get("content") or right.get("text") or "").strip()
@@ -271,6 +278,8 @@ def load_training_texts(
     dataset_names = parse_dataset_names(dataset)
     pairs: List[DialogPair] = []
     for dataset_name in dataset_names:
+        # Every loader returns the same simple shape: (prompt, response). That
+        # common shape lets the training code stay independent of dataset quirks.
         if dataset_name == "cornell":
             pairs.extend(load_cornell_pairs(corpus_dir, max_pairs=max_pairs))
         elif dataset_name == "dailydialog":
@@ -307,6 +316,9 @@ def write_dataset_manifest(path: str | Path) -> None:
 
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+
+    # The manifest documents what data can be loaded without checking Python
+    # code. It is intentionally metadata only, not the full external datasets.
     path.write_text(json.dumps(DATASET_RECIPES, indent=2), encoding="utf-8")
 
 
@@ -383,6 +395,8 @@ def build_datasets(
     if train_size <= 0:
         raise ValueError("Need at least two examples to create a validation split.")
 
+    # A fixed generator seed makes the split repeatable. That is useful when
+    # comparing two training runs because they validate on the same examples.
     generator = torch.Generator().manual_seed(seed)
     train_dataset, valid_dataset = random_split(
         full_dataset,

@@ -26,6 +26,8 @@ def load_chatbot(checkpoint_path: str, cpu: bool = False):
     device = torch.device("cuda" if torch.cuda.is_available() and not cpu else "cpu")
     checkpoint = torch.load(checkpoint_path, map_location=device)
 
+    # The checkpoint contains both the learned weights and the "recipe" needed
+    # to rebuild the model class before loading those weights.
     tokenizer = tokenizer_from_dict(checkpoint["tokenizer"])
     config = ModelConfig.from_dict(checkpoint["model_config"])
     model = TransformerChatModel(config).to(device)
@@ -73,6 +75,8 @@ def generate_reply(
     # If the prompt is longer than the model's context window, keep the most
     # recent tokens. Recent conversation is usually the most relevant context.
     prompt_ids = tokenizer.encode(prompt)[-model.config.block_size :]
+
+    # PyTorch models expect batches, so wrap the one prompt in a batch of size 1.
     input_ids = torch.tensor([prompt_ids], dtype=torch.long, device=device)
 
     output_ids = model.generate(
@@ -131,6 +135,8 @@ def chat_loop(
         if message.lower() in {"q", "quit", "exit"}:
             break
 
+        # Keep the conversation history in memory so each next reply can see a
+        # few recent turns. This is not long-term memory; it is prompt context.
         reply = generate_reply(
             model=model,
             tokenizer=tokenizer,

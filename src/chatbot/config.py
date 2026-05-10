@@ -47,16 +47,24 @@ class ModelConfig:
         """Fill derived defaults and validate shape choices."""
 
         if self.n_kv_head is None:
+            # If no grouped-query setting is provided, fall back to classic
+            # attention where every query head has its own key/value head.
             self.n_kv_head = self.n_head
         if self.ffn_hidden_size is None:
             # SwiGLU uses three projections, so the hidden size can be smaller
             # than the classic Transformer 4x MLP while still being expressive.
             self.ffn_hidden_size = self.n_embd * 4
         if self.n_embd % self.n_head != 0:
+            # Each attention head receives an equal slice of the hidden vector,
+            # so the hidden size must divide cleanly by the head count.
             raise ValueError("n_embd must be divisible by n_head.")
         if self.n_head % self.n_kv_head != 0:
+            # GQA repeats key/value heads across query heads, which only works
+            # when the repeat count is a whole number.
             raise ValueError("n_head must be divisible by n_kv_head for GQA.")
         if (self.n_embd // self.n_head) % 2 != 0:
+            # RoPE rotates hidden dimensions in pairs, so one head must contain
+            # an even number of dimensions.
             raise ValueError("The attention head dimension must be even for RoPE.")
 
     @property
@@ -89,6 +97,9 @@ class ModelConfig:
 
         with open(path, "r", encoding="utf-8") as file:
             data = yaml.safe_load(file) or {}
+
+        # The YAML file maps directly onto ModelConfig field names, keeping the
+        # config readable for people who do not want to edit Python code.
         return cls.from_dict(data)
 
 
@@ -122,6 +133,8 @@ def chatbot_10b_config() -> ModelConfig:
 def tiny_config(vocab_size: int = 128) -> ModelConfig:
     """Return a tiny config used by tests and CPU smoke runs."""
 
+    # This is intentionally much smaller than a useful LLM. Its job is to prove
+    # the code path works on a normal laptop or in CI.
     return ModelConfig(
         model_name="chatbot-tiny",
         vocab_size=vocab_size,
