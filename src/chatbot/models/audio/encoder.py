@@ -140,21 +140,36 @@ class AudioEncoder(nn.Module):
         )
 
     def forward(self, waveform: torch.Tensor) -> torch.Tensor:
-        # Mel → [batch, n_mels, frames]
+        # Step 1: raw waveform → log-mel spectrogram. Shape goes from
+        # [batch, samples] to [batch, n_mels, frames]. Each mel frame is
+        # 10 ms of audio (default ``hop_length=160`` at 16 kHz).
         mel = self.mel(waveform)
-        # → [batch, dim, frames'] via convs (frames' = frames / 4 roughly).
+        # Step 2: two strided Conv1ds shrink the time axis 4x. A 1-second
+        # clip with 100 mel frames becomes ~25 conv-frames. Without this
+        # downsample the LLM would receive hundreds of audio tokens per
+        # second of speech, which is far more than it actually needs.
         x = self.input_proj(mel)
-        # → [batch, frames', dim] for the Transformer blocks.
+        # Step 3: re-layout to [batch, frames', dim] which is what the
+        # Transformer blocks expect (time as the sequence axis).
         x = x.transpose(1, 2)
         seq = x.shape[1]
+        # Step 4: trim very long inputs to ``max_frames`` rather than
+        # crashing. In production you'd chunk long audio into overlapping
+        # windows *before* the encoder; this guard is a safety net.
         if seq > self.max_frames:
-            # Trim long audio rather than crash. Production training should
-            # chunk audio into windows before reaching this branch.
             x = x[:, : self.max_frames]
             seq = self.max_frames
+        # Step 5: add the learned positional embedding for each frame.
+        # Audio is short enough that absolute positions work fine; no
+        # RoPE here.
         x = x + self.pos_embed[:, :seq]
 
+        # Step 6: stack of Transformer blocks (RMSNorm + MHA + SwiGLU)
+        # acts on the frame sequence.
         for block in self.blocks:
             x = block(x)
         x = self.final_norm(x)
+        # Step 7: 2-layer MLP projects each frame into the LLM's
+        # embedding space. The result is what the LLM's `<|audio|>`
+        # placeholder tokens get replaced with.
         return self.connector(x)

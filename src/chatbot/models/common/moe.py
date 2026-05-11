@@ -200,24 +200,37 @@ class MixtureOfExperts(nn.Module):
         else:
             aux_loss = x.new_zeros(())
 
-        # AL-free balancing: nudge the bias so under-used experts become
-        # easier to select next step.
+        # AL-free balancing: nudge the per-expert bias so under-used
+        # experts (f_i below target) get a *higher* bias next step and
+        # over-used experts a *lower* one. This is a closed-loop control
+        # signal — no gradients involved — that keeps token allocation
+        # roughly uniform without an explicit auxiliary loss term.
         if self.training and self.load_balancing == "aux_loss_free":
             target_load = 1.0 / self.num_routed_experts
             with torch.no_grad():
+                # Subtraction direction: f_i > target → delta > 0 → bias
+                # decreases → expert becomes less attractive next step.
                 delta = (f_i - target_load) * self.bias_update_speed
                 self.router_bias.sub_(delta)
 
         # ---- Dispatch tokens to experts ----
-        # Flatten the (token, slot) pairs into one big bag-of-assignments.
+        # We flatten the (token, slot) pairs into a bag of assignments.
+        # If token 5 was routed to experts [13, 47, 91], we'd add three
+        # entries: (5, 13), (5, 47), (5, 91). All N*K such entries are
+        # processed in a single batched call to the expert group.
         flat_expert_ids = topk_idx.reshape(-1)                          # [N*K]
+        # Each token id is repeated K times because it goes to K experts.
         flat_token_ids = torch.arange(n_tokens, device=x.device).repeat_interleave(self.num_active_experts)
+        # Gather the input vector for each (token, expert) assignment.
         # We could sort by expert id for slightly better cache locality,
-        # but the unsorted gather works correctly and is easier to read.
+        # but the unsorted gather is correct and easier to read.
         token_inputs = flat[flat_token_ids]                             # [N*K, d_model]
+        # Run each assignment through the right expert in parallel.
         expert_outputs = self.experts.forward_tokens(token_inputs, flat_expert_ids)
 
-        # Weight each expert output by its router probability.
+        # Weight each expert output by its router probability. The K
+        # weights for a single token sum to 1, so the final per-token
+        # routed output is a convex combination of the K expert outputs.
         flat_weights = topk_weights.reshape(-1, 1)                      # [N*K, 1]
         expert_outputs = expert_outputs * flat_weights
 

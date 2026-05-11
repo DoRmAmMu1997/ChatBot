@@ -1,5 +1,5 @@
 # --------------------------------------------------------------------------
-# Tool-Use Supervised Fine-Tuning (Forge-250B only).
+# Tool-Use Supervised Fine-Tuning (Forge only).
 #
 # Trains the model to emit well-formed <tool_call>…</tool_call> blocks that
 # match the runtime's expected JSON schema. The training data is a mix of

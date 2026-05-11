@@ -36,6 +36,12 @@ _APACHE_RE = re.compile(
 
 
 def _try_parse_json_line(line: str) -> Optional[Dict[str, Any]]:
+    """Return a parsed dict if the line is a single JSON object, else None.
+
+    We bail early if the line doesn't look like ``{ ... }`` so we don't pay
+    the JSON parser's price on plain-text lines.
+    """
+
     line = line.strip()
     if not (line.startswith("{") and line.endswith("}")):
         return None
@@ -46,8 +52,16 @@ def _try_parse_json_line(line: str) -> Optional[Dict[str, Any]]:
 
 
 def _parse_one(line: str) -> Dict[str, Any]:
-    """Try each known format; if none match, fall back to a free-text record."""
+    """Try each known format; if none match, fall back to a free-text record.
 
+    Returns a uniform schema (``timestamp``, ``level``, ``source``,
+    ``message``, ``raw``, ``format``) regardless of what the original line
+    looked like, so downstream code (clustering, search) doesn't need to
+    care which format the user pasted.
+    """
+
+    # JSON-lines are common in modern services — try those first since they
+    # carry the most structure.
     j = _try_parse_json_line(line)
     if j is not None:
         return {
@@ -58,6 +72,9 @@ def _parse_one(line: str) -> Dict[str, Any]:
             "raw": line,
             "format": "json",
         }
+    # Try each regex in order; first match wins. Order matters: K8s logs
+    # are timestamp-prefixed and similar to syslog, but the regex is
+    # stricter, so we try it first.
     for fmt, rx in (("k8s", _K8S_RE), ("syslog", _SYSLOG_RE), ("apache", _APACHE_RE)):
         m = rx.match(line)
         if m:
@@ -70,6 +87,8 @@ def _parse_one(line: str) -> Dict[str, Any]:
                 "raw": line,
                 "format": fmt,
             }
+    # Nothing matched — treat as free-form. We still emit the uniform
+    # schema with ``message`` set to the whole line.
     return {
         "timestamp": None, "level": None, "source": None,
         "message": line, "raw": line, "format": "freeform",
@@ -77,7 +96,20 @@ def _parse_one(line: str) -> Dict[str, Any]:
 
 
 def _normalize_for_cluster(msg: str) -> str:
-    """Strip numbers, IDs, IPs so similar messages collapse into one cluster."""
+    """Replace numeric / id-like substrings so similar messages collapse.
+
+    Two error lines that differ only in a trace id or timestamp should
+    cluster together. We strip the four common variable patterns:
+
+    * IPv4 addresses → ``<IP>``
+    * 0xHEX literals → ``<HEX>``
+    * long lowercase hex strings (trace ids, hashes) → ``<HASH>``
+    * plain integers → ``<N>``
+
+    Lowercasing makes "ERROR" and "Error" collide. The result isn't
+    meant to be read by humans — it's just a key for the similarity
+    counter in ``summarize_incidents``.
+    """
 
     msg = re.sub(r"\b\d{1,3}(?:\.\d{1,3}){3}\b", "<IP>", msg)
     msg = re.sub(r"0x[0-9a-fA-F]+", "<HEX>", msg)

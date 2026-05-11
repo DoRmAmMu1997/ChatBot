@@ -62,8 +62,8 @@ Then sanity-check the model configs hit their target parameter counts:
 
 ```powershell
 python scripts/count_params.py --model tiny
-python scripts/count_params.py --model aurora-50b
-python scripts/count_params.py --model forge-250b
+python scripts/count_params.py --model aurora-72b
+python scripts/count_params.py --model forge-320b
 ```
 
 Building the 250B graph on CPU takes a few minutes but only happens once.
@@ -96,13 +96,13 @@ python scripts/pretrain.py `
     max_steps=50 micro_batch_size=2
 ```
 
-Real Aurora-50B pretraining run (multi-node):
+Real Aurora-72B pretraining run (multi-node):
 
 ```bash
 torchrun --nproc-per-node=8 --nnodes=$NNODES --rdzv-backend=c10d \
     --rdzv-endpoint=$MASTER_ADDR:29500 \
     scripts/pretrain.py \
-    --model aurora-50b \
+    --model aurora-72b \
     --training pretrain \
     --tokenizer checkpoints/aurora-tokenizer.json
 ```
@@ -112,8 +112,8 @@ Hardware expectations:
 | Model        | Pretrain (full)    | SFT (full)      | LoRA  | QLoRA                     |
 |--------------|--------------------|-----------------|-------|---------------------------|
 | Tiny (50M)   | 1 GPU              | 1 GPU           | 1 GPU | 1 GPU                     |
-| Aurora-50B   | 256–1024× H100     | 32–64× H100     | 8× H100 | 2–4× A100 / RTX 6000     |
-| Forge-250B   | 1024–4096× H100    | 64–128× H100    | 16× H100 | 4–8× H100 (NF4)         |
+| Aurora-72B   | 256–1024× H100     | 32–64× H100     | 8× H100 | 2–4× A100 / RTX 6000     |
+| Forge-320B   | 1024–4096× H100    | 64–128× H100    | 16× H100 | 4–8× H100 (NF4)         |
 
 (Hours/days depending on cluster size — that's compute, not code, so we
 don't try to estimate it precisely.)
@@ -125,7 +125,7 @@ on long packed documents:
 
 ```bash
 torchrun --nproc-per-node=8 scripts/pretrain.py \
-    --model aurora-50b \
+    --model aurora-72b \
     --training long_context \
     --tokenizer checkpoints/aurora-tokenizer.json \
     resume_from=outputs/pretrain/latest
@@ -138,7 +138,7 @@ Run this in stages: 8K → 32K → 128K → 256K (Aurora) or
 
 ```bash
 torchrun --nproc-per-node=8 scripts/sft.py \
-    --model aurora-50b \
+    --model aurora-72b \
     --training sft \
     --tokenizer checkpoints/aurora-tokenizer.json \
     --resume-from outputs/long_context/latest
@@ -148,7 +148,7 @@ torchrun --nproc-per-node=8 scripts/sft.py \
 
 ```bash
 torchrun --nproc-per-node=8 scripts/dpo.py \
-    --model aurora-50b \
+    --model aurora-72b \
     --training dpo \
     --tokenizer checkpoints/aurora-tokenizer.json \
     --resume-from outputs/sft/latest
@@ -158,7 +158,7 @@ torchrun --nproc-per-node=8 scripts/dpo.py \
 
 ```bash
 torchrun --nproc-per-node=8 scripts/sft.py \
-    --model forge-250b \
+    --model forge-320b \
     --training tool-use-sft \
     --tokenizer checkpoints/forge-tokenizer.json \
     --resume-from outputs/dpo/latest
@@ -173,7 +173,7 @@ LoRA is the realistic option for end-users with modest hardware:
 
 ```powershell
 python scripts/lora_finetune.py `
-    --model aurora-50b `
+    --model aurora-72b `
     --training lora `
     --tokenizer checkpoints/aurora-tokenizer.json `
     --base-checkpoint outputs/sft/latest

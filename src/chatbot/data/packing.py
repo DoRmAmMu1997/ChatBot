@@ -38,19 +38,31 @@ def pack_sequences(
         pad_token_id: id used to fill the final partial block.
     """
 
+    # Running buffer. We append every source example here (followed by an
+    # EOS) and emit a fixed-size chunk whenever the buffer is full enough.
     buffer: List[int] = []
 
     for ids in token_streams:
-        # Drop empty examples — they'd just append a stray EOS.
+        # Drop empty examples — they'd just append a stray EOS with no
+        # content and inflate the EOS frequency in training.
         if not ids:
             continue
+        # Append the example tokens, then a single EOS to mark the
+        # boundary. During training the model learns to "reset" at EOS
+        # and start the next document.
         buffer.extend(ids)
         buffer.append(eos_token_id)
 
-        # Drain as many full blocks as possible.
+        # Drain as many full blocks as the buffer currently contains.
+        # A typical batch will produce 0 or 1 blocks per source example;
+        # the loop is here for the rare case where one example is bigger
+        # than the block size and produces several.
         while len(buffer) >= block_size:
             chunk = buffer[:block_size]
             buffer = buffer[block_size:]
+            # ``labels`` is the same as ``input_ids`` because we use
+            # next-token-prediction — the training loop shifts labels by
+            # one internally.
             yield PackedExample(input_ids=chunk, labels=list(chunk))
 
     # Trailing partial block — pad to length, keep the labels matching.

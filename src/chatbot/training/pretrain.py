@@ -170,7 +170,7 @@ def run_pretrain(
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Pretrain Aurora or Forge.")
-    parser.add_argument("--model", required=True, help="Model config name, e.g. 'tiny' or 'aurora-50b'.")
+    parser.add_argument("--model", required=True, help="Model config name, e.g. 'tiny' or 'aurora-72b'.")
     parser.add_argument("--training", default="pretrain", help="Training config name (under configs/training).")
     parser.add_argument("--tokenizer", required=True, help="Path to tokenizer.json.")
     parser.add_argument("override", nargs="*", help="Dot-list overrides, e.g. training.lr=5e-5.")

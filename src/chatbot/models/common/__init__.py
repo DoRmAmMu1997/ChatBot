@@ -1,8 +1,9 @@
 """Shared Transformer building blocks (RMSNorm, RoPE, GQA, MLA, SwiGLU, MoE).
 
-These are imported by both Aurora-50B (dense + GQA + vision) and Forge-250B
-(MoE + MLA). Keeping them in one place means a fix in attention.py or a
-correctness improvement in moe.py automatically benefits both models.
+These are imported by both Aurora (dense + GQA + vision + audio) and
+Forge (MoE + MLA + vision + audio). Keeping them in one place means a
+fix in attention.py or a correctness improvement in moe.py automatically
+benefits both models.
 """
 
 from .attention import GroupedQueryAttention, MultiHeadLatentAttention, build_attention

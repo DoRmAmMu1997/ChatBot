@@ -44,6 +44,15 @@ _TOKEN_RE = re.compile(r"(#[^\n]*|\".*?\"|'.*?'|\b\w+\b|\d+\.?\d*|\S)", re.DOTAL
 
 
 def _classify(token: str) -> str:
+    """Return the theme-key under which a token should be coloured.
+
+    Returns one of: ``"com"`` (comment), ``"str"`` (string literal),
+    ``"kw"`` (Python keyword), ``"num"`` (numeric literal), or ``"fg"``
+    (default foreground). The theme dict picks an RGB tuple from the key.
+    This is a deliberately simple tokenizer — good enough to make rendered
+    code *look* highlighted, not a real Python parser.
+    """
+
     if token.startswith("#"):
         return "com"
     if (token.startswith('"') and token.endswith('"')) or (token.startswith("'") and token.endswith("'")):
@@ -56,7 +65,13 @@ def _classify(token: str) -> str:
 
 
 def _safe_font(size: int) -> ImageFont.ImageFont:
-    """Return a TrueType font if we can find one, else a bitmap fallback."""
+    """Return a TrueType monospace font if we can find one, else a bitmap fallback.
+
+    PIL doesn't know what fonts are installed on the host; we try the
+    common monospace TrueType names in order. If none are present (e.g.
+    on a minimal Linux container without fontconfig) we fall back to
+    PIL's built-in bitmap font, which is small but always works.
+    """
 
     for name in ("Consolas.ttf", "DejaVuSansMono.ttf", "Menlo.ttc", "Courier.ttf"):
         try:

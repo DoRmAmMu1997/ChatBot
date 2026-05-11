@@ -10,7 +10,7 @@ nobody mistakes the harness for a result.
 ```powershell
 python scripts/eval.py `
     --bench humaneval `
-    --model forge-250b `
+    --model forge-320b `
     --checkpoint outputs/dpo/latest `
     --tokenizer checkpoints/forge-tokenizer.json `
     --limit 164
@@ -29,7 +29,7 @@ Supported `--bench` values:
 
 ## Result table (fill in after training)
 
-| Benchmark         | Tiny | Aurora-50B  | Forge-250B  |
+| Benchmark         | Tiny | Aurora-72B  | Forge-320B  |
 |-------------------|------|-------------|-------------|
 | HumanEval         | TBD  | TBD         | TBD         |
 | MBPP              | TBD  | TBD         | TBD         |

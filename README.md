@@ -41,8 +41,8 @@ before you commit to renting GPUs.
 
 ## Quick links
 
-* [`docs/architecture-aurora-50b.md`](docs/architecture-aurora-50b.md)
-* [`docs/architecture-forge-250b.md`](docs/architecture-forge-250b.md)
+* [`docs/architecture-aurora-72b.md`](docs/architecture-aurora-72b.md)
+* [`docs/architecture-forge-320b.md`](docs/architecture-forge-320b.md)
 * [`docs/training-guide.md`](docs/training-guide.md) — end-to-end how-to-train
 * [`docs/plugin-system.md`](docs/plugin-system.md) — Claude-Code-style runtime reference
 * [`docs/datasets.md`](docs/datasets.md) — every dataset, license, fetch instructions
@@ -59,7 +59,7 @@ chatbot/
 ├── requirements.txt
 ├── requirements-train.txt
 ├── configs/
-│   ├── models/                      # tiny, aurora-50b, forge-250b
+│   ├── models/                      # tiny, aurora-72b, forge-320b
 │   ├── training/                    # pretrain, long_context, sft, dpo, lora, tool-use-sft
 │   └── runtime/                     # default, aurora-chat, forge-coder
 ├── docs/                            # all the architecture / training / plugin docs
@@ -113,8 +113,8 @@ serious compute:
 
 ```powershell
 python scripts/count_params.py --model tiny
-python scripts/count_params.py --model aurora-50b
-python scripts/count_params.py --model forge-250b
+python scripts/count_params.py --model aurora-72b
+python scripts/count_params.py --model forge-320b
 ```
 
 ## Quick smoke test (no GPU required)
@@ -160,18 +160,18 @@ hyperparameter tables, hardware sizing, and the long-context extension
 recipe. Headline commands:
 
 ```bash
-# Aurora-50B
+# Aurora-72B
 torchrun --nproc-per-node=8 scripts/pretrain.py \
-    --model aurora-50b --training pretrain \
+    --model aurora-72b --training pretrain \
     --tokenizer checkpoints/aurora-tokenizer.json
 
 torchrun --nproc-per-node=8 scripts/pretrain.py \
-    --model aurora-50b --training long_context \
+    --model aurora-72b --training long_context \
     --tokenizer checkpoints/aurora-tokenizer.json \
     resume_from=outputs/pretrain/latest
 
-torchrun --nproc-per-node=8 scripts/sft.py    --model aurora-50b --tokenizer ...
-torchrun --nproc-per-node=8 scripts/dpo.py    --model aurora-50b --tokenizer ...
+torchrun --nproc-per-node=8 scripts/sft.py    --model aurora-72b --tokenizer ...
+torchrun --nproc-per-node=8 scripts/dpo.py    --model aurora-72b --tokenizer ...
 ```
 
 Forge adds one extra stage (tool-use SFT) at the end. Compute budgets
@@ -180,8 +180,8 @@ are very real:
 | Model        | Pretrain (full)    | SFT (full)      | LoRA   | QLoRA                |
 |--------------|--------------------|-----------------|--------|----------------------|
 | Tiny (~50M)  | 1 GPU              | 1 GPU           | 1 GPU  | 1 GPU                |
-| Aurora-50B   | 256–1024× H100     | 32–64× H100     | 8× H100| 2–4× A100 / RTX 6000 |
-| Forge-250B   | 1024–4096× H100    | 64–128× H100    | 16× H100 | 4–8× H100 (NF4)   |
+| Aurora-72B   | 256–1024× H100     | 32–64× H100     | 8× H100| 2–4× A100 / RTX 6000 |
+| Forge-320B   | 1024–4096× H100    | 64–128× H100    | 16× H100 | 4–8× H100 (NF4)   |
 
 LoRA / QLoRA paths (in `scripts/lora_finetune.py`) make continuation
 training realistic on consumer hardware.
@@ -190,7 +190,7 @@ training realistic on consumer hardware.
 
 ```powershell
 python scripts/chat.py `
-    --model aurora-50b `
+    --model aurora-72b `
     --checkpoint outputs/dpo/latest `
     --tokenizer checkpoints/aurora-tokenizer.json `
     --runtime aurora-chat
@@ -209,7 +209,7 @@ python scripts/chat.py ... runtime.temperature=0.3
 
 ```powershell
 python scripts/agent.py `
-    --model forge-250b `
+    --model forge-320b `
     --checkpoint outputs/tool_use_sft/latest `
     --tokenizer checkpoints/forge-tokenizer.json `
     --runtime forge-coder
@@ -228,7 +228,7 @@ Working examples: [`plugins_examples/`](plugins_examples/).
 ```powershell
 python scripts/eval.py `
     --bench humaneval `
-    --model forge-250b `
+    --model forge-320b `
     --checkpoint outputs/dpo/latest `
     --tokenizer checkpoints/forge-tokenizer.json `
     --limit 164

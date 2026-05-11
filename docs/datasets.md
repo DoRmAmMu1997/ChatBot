@@ -4,7 +4,7 @@ Every dataset the training pipeline knows about is listed in
 `src/chatbot/data/registry.py`. The training scripts only use the ones
 referenced from their YAML mix; nothing is downloaded silently.
 
-## Aurora-50B mix
+## Aurora-72B mix
 
 | Dataset                | Stage          | License        | Notes |
 |------------------------|----------------|----------------|-------|
@@ -25,7 +25,7 @@ referenced from their YAML mix; nothing is downloaded silently.
 | `ultrafeedback`        | dpo            | MIT            | Binarized preferences. |
 | `hh_rlhf`              | dpo            | MIT            | Anthropic's helpfulness/harmlessness preferences. |
 
-## Forge-250B mix
+## Forge-320B mix
 
 | Dataset                | Stage          | License        | Notes |
 |------------------------|----------------|----------------|-------|

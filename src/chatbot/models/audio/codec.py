@@ -113,30 +113,66 @@ class _VectorQuantizer(nn.Module):
         self.codebook_dim = codebook_dim
 
     def forward(self, x: torch.Tensor):
-        """Args: ``[batch, codebook_dim, frames]``. Returns (quantized, codes, vq_loss)."""
+        """Args: ``[batch, codebook_dim, frames]``. Returns (quantized, codes, vq_loss).
+
+        For each input frame we find the codebook vector it's closest to,
+        replace the frame with that codebook vector, and emit an integer
+        "code" — the index of the chosen codebook entry. That integer is
+        what eventually ends up in the LLM's vocabulary as ``<audio:N>``.
+        """
 
         batch, dim, frames = x.shape
+        # Move the time axis to the middle and flatten so every (batch,
+        # frame) pair becomes a single row in a 2-D tensor. Cheaper to
+        # compute pairwise distances on a flat tensor than a 3-D one.
         flat = x.permute(0, 2, 1).reshape(-1, dim)  # [batch*frames, dim]
 
-        # Squared distance to each codebook entry.
-        # ||x - e||^2 = ||x||^2 - 2 x·e + ||e||^2
+        # Compute the squared Euclidean distance from every frame to every
+        # codebook vector. The identity
+        #     ||x - e||^2 = ||x||^2 - 2 * x·e + ||e||^2
+        # lets us do it with two squared-norms and one matmul, which is
+        # much faster than the naive broadcasted-subtract-then-norm
+        # approach when the codebook is large (e.g. 4096 entries).
         x_sq = flat.pow(2).sum(dim=-1, keepdim=True)
         c = self.codebook.weight
         c_sq = c.pow(2).sum(dim=-1)
         dists = x_sq - 2 * flat @ c.t() + c_sq
 
+        # ``codes`` is the argmin along the codebook dimension — i.e. for
+        # each frame, the integer index of the nearest codebook entry.
         codes = dists.argmin(dim=-1)              # [batch*frames]
+        # Look up the actual vector for that index. This is what the
+        # decoder will see; the difference between ``flat`` and
+        # ``quantized`` is the quantization error.
         quantized = self.codebook(codes)         # [batch*frames, dim]
 
-        # VQ loss has two pieces: the codebook moves toward the encoder
-        # (commitment), and the encoder moves toward the codebook
-        # (codebook loss). Standard formulation from VQ-VAE.
+        # VQ loss has two pieces — both standard from the VQ-VAE paper:
+        #
+        #   * ``commitment``: penalises the *encoder* for outputting
+        #     vectors far from any codebook entry. ``quantized.detach()``
+        #     stops gradient through the codebook side so only the
+        #     encoder is pushed by this term.
+        #   * ``codebook_loss``: penalises the *codebook* for entries far
+        #     from the encoder outputs. ``flat.detach()`` symmetrically
+        #     stops gradient through the encoder side here.
+        #
+        # The coefficient 0.25 on commitment is the original VQ-VAE
+        # recipe; commitment is generally easier to satisfy than codebook
+        # so it gets the smaller weight.
         commitment = F.mse_loss(quantized.detach(), flat)
         codebook_loss = F.mse_loss(quantized, flat.detach())
         vq_loss = codebook_loss + 0.25 * commitment
 
-        # Straight-through estimator.
+        # Straight-through estimator: in the forward pass the decoder
+        # sees ``quantized`` (the snapped-to-codebook vector); in the
+        # backward pass the gradient is computed *as if* the encoder
+        # output ``flat`` had been passed through. The "trick" is to
+        # write ``flat + (quantized - flat).detach()`` — the value is
+        # identical to ``quantized`` numerically, but PyTorch's autograd
+        # treats it as a function of ``flat`` because the codebook delta
+        # is detached.
         quantized = flat + (quantized - flat).detach()
+        # Restore the [batch, dim, frames] layout the decoder expects.
         quantized = quantized.view(batch, frames, dim).permute(0, 2, 1)
         codes = codes.view(batch, frames)
         return quantized, codes, vq_loss

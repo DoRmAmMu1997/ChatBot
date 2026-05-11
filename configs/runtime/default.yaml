@@ -24,7 +24,7 @@ max_new_tokens: 4096
 stop_sequences: []      # e.g. ["</tool_call>", "<|user|>"]
 
 # Active context window. Must be <= the model's max_position_embeddings.
-# Aurora-50B default = 262144 (256K); Forge-250B default = 1048576 (1M).
+# Aurora default = 262144 (256K); Forge default = 1048576 (1M).
 context_window: 262144
 
 # Streaming.

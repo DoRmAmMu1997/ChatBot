@@ -59,26 +59,41 @@ class RLEFRollout:
 def _grpo_loss(rollouts: List[RLEFRollout]) -> torch.Tensor:
     """Group-relative policy optimization loss (REINFORCE + LOO baseline).
 
-    For each problem we take G rollouts and use their *group-mean* reward as
-    a baseline. The loss is::
+    The recipe in one paragraph: for each problem we take G rollouts
+    and use their *group-mean* reward as a baseline. Each rollout's
+    advantage is ``reward - baseline``: rollouts that beat the average
+    get a positive advantage and have their log-probabilities pushed
+    *up*; rollouts that underperform get a negative advantage and have
+    their log-probabilities pushed *down*. The loss is::
 
-        L = - (reward - baseline) * sum_t log p(token_t)
+        L = - (reward - baseline) * sum_t log p(token_t | prompt)
 
-    averaged over the group. The baseline removes the high-variance "overall
-    difficulty" signal and isolates the per-rollout advantage.
+    averaged over the group. Subtracting the baseline cancels the
+    high-variance "overall difficulty" signal (a hard problem is hard
+    for everyone) and isolates the per-rollout advantage. The advantage
+    is a *scalar weight* on the policy gradient — we detach the reward
+    from the autograd graph (it's already a float).
     """
 
     if not rollouts:
         return torch.tensor(0.0, requires_grad=False)
+    # Compute the per-rollout reward and the leave-one-out group baseline.
     rewards = torch.tensor([r.reward for r in rollouts])
     baseline = rewards.mean()
     advantages = rewards - baseline
 
     loss = torch.tensor(0.0)
     for rollout, advantage in zip(rollouts, advantages):
+        # Skip rollouts with no generated tokens — would contribute zero
+        # to the policy gradient and the empty sum complicates autograd.
         if rollout.log_probs.numel() == 0:
             continue
+        # Negative sign because we *minimize* loss to *maximize* the
+        # expected reward. ``float(advantage)`` detaches the scalar from
+        # the autograd graph since rewards don't have gradients.
         loss = loss + (-float(advantage) * rollout.log_probs.sum())
+    # Divide by group size so the per-step gradient magnitude is
+    # comparable across runs with different ``group_size``.
     return loss / len(rollouts)
 
 

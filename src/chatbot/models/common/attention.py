@@ -212,20 +212,33 @@ class MultiHeadLatentAttention(nn.Module):
         batch, seq, _ = x.shape
 
         # ---- Q side ----
+        # Q passes through a low-rank bottleneck: ``x → q_a_proj``
+        # (d_model → q_lora_rank) → LayerNorm → ``q_b_proj`` (q_lora_rank
+        # → n_heads × qk_head_dim). The bottleneck makes Q cheaper to
+        # train without affecting inference (Q isn't cached).
         q_latent = self.q_a_norm(self.q_a_proj(x))
         q = self.q_b_proj(q_latent).view(batch, seq, self.n_heads, self.qk_head_dim).transpose(1, 2)
+        # Each head's Q is split into two pieces:
+        #   * ``q_nope`` — the "no positional encoding" half. Used as-is.
+        #   * ``q_rope`` — the half that *will* receive RoPE rotation.
+        # Splitting like this means we only rotate a small slice of Q (and
+        # the matching slice of K), which saves compute at long contexts.
         q_nope, q_rope = torch.split(
             q, [self.qk_nope_head_dim, self.qk_rope_head_dim], dim=-1
         )
 
         # ---- KV side: compute the *new* compressed latent + k-rope ----
+        # One Linear projects x to (latent || rope-key). The latent is the
+        # whole "value" of the KV cache for this token — we'll re-expand
+        # it on demand into per-head keys (nope-part) and values.
         kv_a = self.kv_a_proj_with_mqa(x)
         compressed_kv_new, k_rope_new = torch.split(
             kv_a, [self.kv_lora_rank, self.qk_rope_head_dim], dim=-1
         )
         compressed_kv_new = self.kv_a_norm(compressed_kv_new)
         # k_rope is shared across heads (no head dim in the cache); add a
-        # broadcast dim for the attention computation later.
+        # broadcast dim for the attention computation later. This is the
+        # second cached tensor (the first is ``compressed_kv``).
         k_rope_new = k_rope_new.unsqueeze(2)  # [batch, seq, 1, qk_rope_head_dim]
 
         # ---- Append to the cache (or build it fresh) ----
@@ -238,21 +251,35 @@ class MultiHeadLatentAttention(nn.Module):
             k_rope = k_rope_new
 
         # ---- Re-expand the latent to per-head K (nope) and V ----
+        # One Linear maps the cached latent back up to the full per-head
+        # K and V dimensions. This is the "B" half of the LoRA-style
+        # factorization, mirroring Q. Crucially the *cache* stores only
+        # the small ``compressed_kv``; the wide re-expansion is recomputed
+        # at every step from the cache.
         kv_b = self.kv_b_proj(compressed_kv)
         total_seq = compressed_kv.shape[1]
         kv_b = kv_b.view(batch, total_seq, self.n_heads, self.qk_nope_head_dim + self.v_head_dim)
         k_nope, v = torch.split(
             kv_b, [self.qk_nope_head_dim, self.v_head_dim], dim=-1
         )
-        # Transpose to standard ``[batch, heads, seq, dim]`` layout.
+        # Transpose to standard ``[batch, heads, seq, dim]`` layout that
+        # ``scaled_dot_product_attention`` expects.
         k_nope = k_nope.transpose(1, 2)
         v = v.transpose(1, 2)
+        # k_rope was stored shared-across-heads to save cache; here we
+        # broadcast it to every head so the dimensions line up with k_nope.
         k_rope = k_rope.expand(batch, total_seq, self.n_heads, self.qk_rope_head_dim).transpose(1, 2)
 
         # ---- Apply RoPE to the small rope-only pieces of Q and K ----
+        # Only the rope-halves get rotated. The nope-halves carry content
+        # information that should be position-agnostic; mixing RoPE in
+        # there would entangle "what" with "where".
         q_rope, k_rope_rotated = apply_rotary_emb(q_rope, k_rope, cos, sin, position_ids=position_ids)
 
-        # ---- Concatenate the rope and nope pieces into the final Q, K ----
+        # ---- Re-assemble Q and K by concatenating the two halves ----
+        # Final per-head Q and K each have width ``qk_head_dim`` =
+        # nope_dim + rope_dim. SDPA from here is identical to regular
+        # multi-head attention.
         q = torch.cat([q_nope, q_rope], dim=-1)
         k = torch.cat([k_nope, k_rope_rotated], dim=-1)
 

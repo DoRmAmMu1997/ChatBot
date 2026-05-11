@@ -41,11 +41,27 @@ logger = get_logger(__name__)
 
 
 def _gather_logprobs(logits: torch.Tensor, labels: torch.Tensor, pad_id: int) -> torch.Tensor:
-    """Sum the model's log-probabilities of the label tokens (ignoring padding)."""
+    """Sum the model's log-probabilities of the label tokens (ignoring padding).
 
-    # logits: [B, T, V], labels: [B, T].
+    Returns ``log p(label_sequence | prompt)`` per batch row — the
+    quantity DPO compares between policy and reference.
+
+    Args:
+        logits: ``[batch, seq, vocab]`` — the model's per-position output.
+        labels: ``[batch, seq]`` — the token ids whose log-prob we want.
+        pad_id: positions with this id are masked out so padding doesn't
+            contribute to the sum.
+    """
+
+    # ``log_softmax`` is numerically more stable than ``log(softmax(...))``;
+    # we cast to float32 because DPO's losses are sensitive to precision.
     log_probs = F.log_softmax(logits.float(), dim=-1)
+    # ``labels.clamp_min(0)`` keeps the gather safe even on padding rows
+    # (where the label might be -100 or some other sentinel); we'll
+    # zero out those contributions with the mask below.
     chosen_lp = log_probs.gather(dim=-1, index=labels.clamp_min(0).unsqueeze(-1)).squeeze(-1)
+    # Mask out pad positions — they shouldn't influence the sequence
+    # log-likelihood.
     mask = (labels != pad_id).float()
     return (chosen_lp * mask).sum(dim=-1)
 
@@ -110,18 +126,28 @@ def run_dpo(
         chosen = batch["chosen_ids"].to(device)
         rejected = batch["rejected_ids"].to(device)
 
+        # Build the full sequences (prompt + response) for chosen and
+        # rejected. We score the *response* portion only when computing
+        # the log-probability, but the model needs the prompt context.
         chosen_full = torch.cat([prompt, chosen], dim=1)
         rejected_full = torch.cat([prompt, rejected], dim=1)
 
-        # Policy logprobs.
+        # Policy log-probabilities — gradient flows through these.
         pol_chosen = _gather_logprobs(policy(chosen_full)["logits"], chosen_full, pad_id)
         pol_rejected = _gather_logprobs(policy(rejected_full)["logits"], rejected_full, pad_id)
 
-        # Reference logprobs (no grad).
+        # Reference log-probabilities — frozen, so no grad. The reference
+        # is typically the SFT checkpoint we started from.
         with torch.no_grad():
             ref_chosen = _gather_logprobs(reference(chosen_full)["logits"], chosen_full, pad_id)
             ref_rejected = _gather_logprobs(reference(rejected_full)["logits"], rejected_full, pad_id)
 
+        # DPO's core scoring quantity. Intuition: how much *more* the
+        # policy prefers ``chosen`` over ``rejected`` than the reference
+        # does. Positive ``logits`` means we're already aligned with the
+        # preference; negative means we need to swing more toward
+        # ``chosen``. ``beta`` controls how strongly we push — smaller
+        # beta keeps the policy closer to the reference.
         logits = beta * ((pol_chosen - ref_chosen) - (pol_rejected - ref_rejected))
         loss = -F.logsigmoid(logits).mean()
 
