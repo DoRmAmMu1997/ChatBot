@@ -1,0 +1,54 @@
+# --------------------------------------------------------------------------
+# DevOps SFT (Forge only).
+#
+# Trains Forge to act like a senior SRE: read logs, parse stack traces,
+# identify the most representative cluster of errors, and propose the
+# smallest reversible fix. Runs between tool-use SFT and RLEF.
+# --------------------------------------------------------------------------
+
+stage: "devops_sft"
+
+sequence_length: 8192
+
+data:
+  mix:
+    - { name: "logqa",                  weight: 0.25 }
+    - { name: "bugrepo_logs",           weight: 0.20 }
+    - { name: "incidentbench",          weight: 0.20 }
+    - { name: "kube_postmortems",       weight: 0.15 }
+    - { name: "synthetic_log_triage",   weight: 0.20 }
+  shuffle_buffer: 20000
+  num_workers: 2
+  mask_user_turns: true
+
+optimizer:
+  name: "adamw"
+  lr: 3.0e-6
+  weight_decay: 0.0
+  betas: [0.9, 0.95]
+  eps: 1.0e-8
+
+scheduler:
+  name: "cosine_with_warmup"
+  warmup_steps: 50
+  min_lr: 1.0e-7
+
+micro_batch_size: 2
+global_batch_size: 64
+max_steps: 1500
+eval_every: 100
+save_every: 250
+log_every: 25
+
+grad_clip: 1.0
+mixed_precision: "bf16"
+gradient_checkpointing: true
+
+distributed:
+  backend: "fsdp"
+  fsdp:
+    sharding_strategy: "FULL_SHARD"
+
+seed: 42
+output_dir: "outputs/devops_sft"
+resume_from: "outputs/tool_use_sft/latest"

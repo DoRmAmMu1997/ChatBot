@@ -22,7 +22,14 @@ from tokenizers import Tokenizer, decoders, models, normalizers, pre_tokenizers,
 
 @dataclass
 class SpecialTokens:
-    """The set of special markers every model uses (or ignores)."""
+    """The set of special markers every model uses (or ignores).
+
+    Audio-token convention: in addition to the named markers below, the
+    tokenizer is trained with ``num_audio_codes`` reserved tokens named
+    ``<audio:0>``, ``<audio:1>``, …, ``<audio:N-1>``. The LLM emits them
+    between ``audio_start`` and ``audio_end``; the runtime decodes the
+    sequence back into a waveform through :class:`AudioCodec`.
+    """
 
     pad: str = "<|pad|>"
     bos: str = "<|bos|>"
@@ -32,25 +39,40 @@ class SpecialTokens:
     system: str = "<|system|>"
     user: str = "<|user|>"
     assistant: str = "<|assistant|>"
-    # Vision (Aurora only).
+    # Vision (Aurora + Forge).
     image: str = "<|image|>"
     image_start: str = "<|image_start|>"
     image_end: str = "<|image_end|>"
+    # Audio I/O (Aurora + Forge).
+    audio: str = "<|audio|>"
+    audio_start: str = "<|audio_start|>"
+    audio_end: str = "<|audio_end|>"
     # Tool calling (Forge).
     tool_call: str = "<|tool_call|>"
     tool_call_end: str = "<|/tool_call|>"
     tool_result: str = "<|tool_result|>"
     tool_result_end: str = "<|/tool_result|>"
 
+    # How many discrete audio codebook tokens to reserve. Matches the
+    # ``codebook_size`` of :class:`AudioCodec` — keep these in sync.
+    num_audio_codes: int = 4096
+
     extra: List[str] = field(default_factory=list)
+
+    def audio_code_tokens(self) -> List[str]:
+        """The ``<audio:N>`` reserved-id tokens (one per codebook entry)."""
+
+        return [f"<audio:{i}>" for i in range(self.num_audio_codes)]
 
     def all(self) -> List[str]:
         return [
             self.pad, self.bos, self.eos, self.unk,
             self.system, self.user, self.assistant,
             self.image, self.image_start, self.image_end,
+            self.audio, self.audio_start, self.audio_end,
             self.tool_call, self.tool_call_end,
             self.tool_result, self.tool_result_end,
+            *self.audio_code_tokens(),
             *self.extra,
         ]
 

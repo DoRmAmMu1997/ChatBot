@@ -1,0 +1,61 @@
+# --------------------------------------------------------------------------
+# Omni-modal pretraining — interleaved text + image + audio.
+#
+# Runs after short-context text pretraining and after the codec has been
+# trained. Teaches the LLM to read images and audio (modality splicing) and
+# to emit audio code tokens between <|audio_start|> and <|audio_end|>.
+# --------------------------------------------------------------------------
+
+stage: "omni_pretrain"
+
+sequence_length: 8192
+
+data:
+  mix:
+    - { name: "fineweb_edu",       weight: 0.40 }
+    - { name: "the_stack_v2",      weight: 0.10 }
+    - { name: "wikipedia",         weight: 0.05 }
+    - { name: "books",             weight: 0.05 }
+    - { name: "laion_recaptioned", weight: 0.10 }
+    - { name: "librispeech",       weight: 0.10 }
+    - { name: "commonvoice",       weight: 0.10 }
+    - { name: "peoples_speech",    weight: 0.10 }
+  pack_sequences: true
+  shuffle_buffer: 50000
+  num_workers: 4
+
+optimizer:
+  name: "adamw"
+  lr: 1.0e-4
+  weight_decay: 0.1
+  betas: [0.9, 0.95]
+  eps: 1.0e-8
+
+scheduler:
+  name: "cosine_with_warmup"
+  warmup_steps: 500
+  min_lr: 1.0e-5
+
+grad_clip: 1.0
+grad_accumulation: 1
+micro_batch_size: 2
+global_batch_size: 512
+max_steps: 100000
+eval_every: 1000
+save_every: 5000
+log_every: 25
+
+mixed_precision: "bf16"
+gradient_checkpointing: true
+activation_checkpoint_every_n_layers: 2
+
+distributed:
+  backend: "fsdp"
+  fsdp:
+    sharding_strategy: "FULL_SHARD"
+    cpu_offload: false
+    use_orig_params: true
+
+seed: 42
+output_dir: "outputs/omni_pretrain"
+resume_from: "outputs/long_context/latest"

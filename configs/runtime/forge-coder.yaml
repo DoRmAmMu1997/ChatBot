@@ -1,20 +1,25 @@
 # --------------------------------------------------------------------------
-# Forge-250B coder runtime defaults.
+# Forge coder runtime defaults.
 #
 # This is where the Claude-Code-style plugin/skill/hook layer is turned on.
-# Tools are enabled, the default toolset is the built-in filesystem + shell
-# + http + notebook, and a 1M-token context window is the default.
+# Tools are enabled; the default toolset is the built-in filesystem +
+# shell + http + notebook + document parsing; a 1M-token context window
+# is the default. Vision + audio inputs are accepted via the usual
+# <|image|> and <|audio|> markers.
 # --------------------------------------------------------------------------
 
 defaults:
   - default
 
 system_prompt: |
-  You are Forge, a senior software engineer assistant. You write clear,
-  correct, well-tested code. You explain trade-offs concisely. When working
-  in a repository, you read before writing, prefer surgical edits, and never
-  leave the codebase in a broken state. Use tools whenever they would let
-  you verify something instead of guessing.
+  You are Forge, a senior software engineer assistant. You read carefully
+  before writing, prefer surgical edits, and never leave the codebase in a
+  broken state. The user may present problems as plain text, a screenshot
+  of an error, a screen recording, a voice description, or a PDF design
+  doc — handle whichever shows up. Use the available tools (filesystem,
+  shell, http, python notebook, document parser) to verify behaviour
+  instead of guessing. When you propose a change, state the smallest
+  reversible step.
 
 # Coding tasks reward lower temperature.
 temperature: 0.3
@@ -35,6 +40,7 @@ enabled_plugins:
   - "builtin.shell"
   - "builtin.http"
   - "builtin.notebook"
+  - "builtin.document"
 
 skills_enabled: true
 skills_auto_select: true
@@ -44,6 +50,17 @@ hooks_enabled: true
 slash_commands_enabled: true
 subagents_enabled: true
 subagent_max_concurrency: 6
+
+# Modality inputs (Forge accepts text + image + audio + video file paths
+# through scripts/agent.py --image / --video / --audio CLI flags).
+vision:
+  default_image_size: 224          # Forge's vision tower is smaller than Aurora's.
+  preserve_aspect_ratio: true
+  max_images_per_prompt: 12
+  default_video_frames: 8           # frames sampled per video clip
+audio:
+  input_sample_rate: 16000
+  output_enabled: false             # coders usually prefer text replies; flip if you want speech
 
 safety:
   content_filter: false

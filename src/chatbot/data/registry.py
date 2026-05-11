@@ -264,6 +264,187 @@ _register(DatasetSpec(
 ))
 
 
+# --- Audio / speech (Aurora omni-pretrain + omni-SFT) ---------------------
+
+def _hf_audio_loader(repo: str, text_key: str = "text", audio_key: str = "audio"):
+    """Yield ``{text, audio_path}`` dicts so the omni loader can splice both."""
+
+    def _load(split: str = "train", streaming: bool = True, **kwargs):
+        from datasets import load_dataset
+
+        ds = load_dataset(repo, split=split, streaming=streaming, **kwargs)
+        for row in ds:
+            text = row.get(text_key) or ""
+            audio = row.get(audio_key)
+            yield {"text": text, "audio": audio}
+    return _load
+
+
+_register(DatasetSpec(
+    name="librispeech",
+    hf_repo="openslr/librispeech_asr",
+    license="CC-BY 4.0",
+    stage="omni_pretrain",
+    description="Read English audiobooks with transcripts. Audio + text alignment.",
+    loader=_hf_audio_loader("openslr/librispeech_asr", "text", "audio"),
+))
+_register(DatasetSpec(
+    name="commonvoice",
+    hf_repo="mozilla-foundation/common_voice_17_0",
+    license="CC0",
+    stage="omni_pretrain",
+    description="Multilingual crowdsourced speech with transcripts.",
+    loader=_hf_audio_loader("mozilla-foundation/common_voice_17_0", "sentence", "audio"),
+))
+_register(DatasetSpec(
+    name="peoples_speech",
+    hf_repo="MLCommons/peoples_speech",
+    license="CC-BY-SA 4.0",
+    stage="omni_pretrain",
+    description="30k+ hours of diverse English speech.",
+    loader=_hf_audio_loader("MLCommons/peoples_speech", "text", "audio"),
+))
+_register(DatasetSpec(
+    name="libritts",
+    hf_repo="mythicinfinity/libritts",
+    license="CC-BY 4.0",
+    stage="audio_codec_pretrain",
+    description="Multi-speaker English read speech with clean recordings — used to train the codec autoencoder.",
+    loader=_hf_audio_loader("mythicinfinity/libritts", "text", "audio"),
+))
+_register(DatasetSpec(
+    name="librilight",
+    hf_repo="LibriLight/librilight",
+    license="open",
+    stage="audio_codec_pretrain",
+    description="60k hours of audio (audiobooks) — bulk codec pretraining.",
+    loader=_hf_audio_loader("LibriLight/librilight", "text", "audio"),
+))
+
+# --- Omni SFT (voice instruction tuning) ----------------------------------
+
+_register(DatasetSpec(
+    name="vocalbench",
+    hf_repo="WillHeld/vocalbench",
+    license="MIT",
+    stage="omni_sft",
+    description="Voice-instruction QA — what users actually say to a speech assistant.",
+    loader=_hf_chat_loader("WillHeld/vocalbench", "messages"),
+))
+_register(DatasetSpec(
+    name="voicebench",
+    hf_repo="hlt-mt/voicebench",
+    license="CC-BY 4.0",
+    stage="omni_sft",
+    description="Voice instruction evaluation benchmark — also used as SFT fodder.",
+    loader=_hf_chat_loader("hlt-mt/voicebench", "messages"),
+))
+_register(DatasetSpec(
+    name="audiollm_instruct",
+    hf_repo="THUDM/AudioLLM-Instruct",
+    license="MIT",
+    stage="omni_sft",
+    description="Mixed audio-instruction dataset for omni-modal SFT.",
+    loader=_hf_chat_loader("THUDM/AudioLLM-Instruct", "messages"),
+))
+
+
+# --- Code-screenshot pretrain (Forge vision tower warm-up) ----------------
+
+_register(DatasetSpec(
+    name="synthetic_code_screenshots",
+    hf_repo=None,
+    license="self-generated",
+    stage="code_screenshot_pretrain",
+    description="Locally rendered code screenshots paired with their source. "
+                "See src/chatbot/data/code_render.py.",
+    loader=lambda *a, **k: iter(()),
+))
+
+
+# --- SWE-bench-Verified train fold + augmentation -------------------------
+
+_register(DatasetSpec(
+    name="swe_bench_verified_train",
+    hf_repo="princeton-nlp/SWE-bench_Verified",
+    license="MIT",
+    stage="rlef",
+    description="Real GitHub bug-fix problems with grading test suites.",
+    loader=_hf_chat_loader("princeton-nlp/SWE-bench_Verified", "messages"),
+    default_split="train",
+))
+_register(DatasetSpec(
+    name="taskbench_code",
+    hf_repo="microsoft/TaskBench",
+    license="MIT",
+    stage="rlef",
+    description="Multi-step coding tasks with executable graders.",
+    loader=_hf_chat_loader("microsoft/TaskBench", "messages"),
+))
+_register(DatasetSpec(
+    name="repofix",
+    hf_repo="bigcode/repofix",
+    license="permissive",
+    stage="rlef",
+    description="Repo-level fix-the-bug problems.",
+    loader=_hf_chat_loader("bigcode/repofix", "messages"),
+))
+_register(DatasetSpec(
+    name="synthetic_swebench_traces",
+    hf_repo=None,
+    license="self-generated",
+    stage="rlef",
+    description="Locally-generated agent traces against synthetic bug-fix problems. "
+                "See src/chatbot/data/synthetic_swebench.py.",
+    loader=lambda *a, **k: iter(()),
+))
+
+
+# --- DevOps SFT ----------------------------------------------------------
+
+_register(DatasetSpec(
+    name="logqa",
+    hf_repo="microsoft/LogQA",
+    license="MIT",
+    stage="devops_sft",
+    description="Question-answer pairs over real log files.",
+    loader=_hf_chat_loader("microsoft/LogQA", "messages"),
+))
+_register(DatasetSpec(
+    name="bugrepo_logs",
+    hf_repo="bugrepo/bug-logs",
+    license="permissive",
+    stage="devops_sft",
+    description="Bug reports paired with log payloads.",
+    loader=_hf_chat_loader("bugrepo/bug-logs", "messages"),
+))
+_register(DatasetSpec(
+    name="incidentbench",
+    hf_repo="IncidentBench/IncidentBench",
+    license="research-only",
+    stage="devops_sft",
+    description="Incident postmortems + remediation traces.",
+    loader=_hf_chat_loader("IncidentBench/IncidentBench", "messages"),
+))
+_register(DatasetSpec(
+    name="kube_postmortems",
+    hf_repo="kubernetes-incident-postmortems",
+    license="permissive",
+    stage="devops_sft",
+    description="K8s incident postmortems in a structured form.",
+    loader=_hf_chat_loader("kubernetes-incident-postmortems", "messages"),
+))
+_register(DatasetSpec(
+    name="synthetic_log_triage",
+    hf_repo=None,
+    license="self-generated",
+    stage="devops_sft",
+    description="Locally-generated log payloads + analyses. "
+                "See src/chatbot/data/synthetic_log_triage.py.",
+    loader=lambda *a, **k: iter(()),
+))
+
+
 def available_datasets(stage: Optional[str] = None) -> List[str]:
     """List the datasets we know about, optionally filtered by stage."""
 

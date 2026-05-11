@@ -1,0 +1,57 @@
+# --------------------------------------------------------------------------
+# Omni-modal SFT — voice + image + text instruction tuning.
+#
+# After SFT on text-only chats, this stage adds dialogue data where the
+# user speaks or shows an image and expects a spoken / multimodal reply.
+# Drives the GPT-4o-style conversational behaviour for Aurora; off by
+# default for Forge (which prefers text replies).
+# --------------------------------------------------------------------------
+
+stage: "omni_sft"
+
+sequence_length: 8192
+
+data:
+  mix:
+    - { name: "tulu3_sft",            weight: 0.30 }
+    - { name: "llava_next_instruct",  weight: 0.20 }
+    - { name: "vocalbench",           weight: 0.20 }
+    - { name: "voicebench",           weight: 0.15 }
+    - { name: "audiollm_instruct",    weight: 0.15 }
+  shuffle_buffer: 30000
+  num_workers: 4
+  mask_user_turns: true
+
+optimizer:
+  name: "adamw"
+  lr: 3.0e-6
+  weight_decay: 0.0
+  betas: [0.9, 0.95]
+  eps: 1.0e-8
+
+scheduler:
+  name: "cosine_with_warmup"
+  warmup_steps: 100
+  min_lr: 1.0e-6
+
+micro_batch_size: 2
+global_batch_size: 128
+max_steps: 3000
+eval_every: 200
+save_every: 500
+log_every: 25
+
+grad_clip: 1.0
+mixed_precision: "bf16"
+gradient_checkpointing: true
+
+distributed:
+  backend: "fsdp"
+  fsdp:
+    sharding_strategy: "FULL_SHARD"
+    cpu_offload: false
+    use_orig_params: true
+
+seed: 42
+output_dir: "outputs/omni_sft"
+resume_from: "outputs/sft/latest"

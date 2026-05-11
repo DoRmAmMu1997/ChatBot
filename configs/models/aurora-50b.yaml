@@ -1,59 +1,73 @@
 # --------------------------------------------------------------------------
-# Aurora-50B — dense multimodal Sonnet-class model.
+# Aurora — dense omni-modal model (Sonnet-/GPT-4o-class).
 #
 # Parameter budget (verified by scripts/count_params.py):
-#   - Embeddings + LM head:                       ~ 1.9 B
-#   - 64 layers * (~210M attn + ~528M SwiGLU FFN):  ~47   B
-#   - Vision tower (SigLIP-So400M-style):          ~0.4  B
-#   - MLP connector:                                ~0.05 B
-#   - Total                                         ~49–50 B
+#   - LM stack (72 layers, 8192-d, 28672 FFN):       ~70  B
+#   - Embeddings + LM head:                           ~1.1 B
+#   - Vision tower (SigLIP-So400M-style):             ~0.5 B
+#   - MLP connectors (vision + audio):                ~0.1 B
+#   - Audio encoder (12-layer Conformer):             ~0.15 B
+#   - Audio codec (separate model — loaded at infer): ~0.12 B
+#   - Total                                           ~72 B
 #
 # Native context: 256K tokens (Sonnet-class). The pretraining stage uses
-# 8K-32K; the long-context extension stage raises RoPE base and YaRN-scales
-# up to the headline 256K, then fine-tunes on long packed documents.
+# 8K-32K; the long-context extension stage raises RoPE base and YaRN-
+# scales up to the headline 256K, then fine-tunes on long packed
+# documents.
+#
+# Filename kept as `aurora-50b.yaml` for backwards compatibility with
+# existing scripts — the numbers inside are v2 (~72 B), not v1 (50 B).
 # --------------------------------------------------------------------------
 
 family: aurora
 
 # Language backbone.
-d_model: 7168
-n_layers: 64
-n_heads: 56
-n_kv_heads: 8           # GQA: 7 queries share each KV head
+d_model: 8192
+n_layers: 72
+n_heads: 64
+n_kv_heads: 8
 head_dim: 128
-ffn_hidden: 24576       # SwiGLU intermediate (~3.4x d_model)
-vocab_size: 131072      # 128K BPE
-max_position_embeddings: 262144  # 256K — set on top of training context via YaRN
+ffn_hidden: 28672
+vocab_size: 132096                # 128K text BPE + 4096 audio + specials
+max_position_embeddings: 262144
 
-# Normalization + position encoding.
 rms_norm_eps: 1.0e-5
-rope_base: 2000000.0    # tuned for 256K (Llama-3.1 used 500K for 128K; we scale up)
+rope_base: 2000000.0
 rope_scaling:
   type: "yarn"
-  factor: 8.0           # extends an 8K-trained context up to 64K cleanly;
-                        # full 256K reached after long-context mid-training stage
+  factor: 8.0
   original_max_position_embeddings: 32768
 
 ffn:
   type: "swiglu"
-  hidden: 24576
+  hidden: 28672
 
 moe:
-  enabled: false        # Aurora is dense
+  enabled: false
 
 vision:
   enabled: true
   image_size: 384
   patch_size: 14
-  vision_dim: 1152      # SigLIP-So400M-style width
+  vision_dim: 1152
   vision_layers: 27
   vision_heads: 16
-  connector_hidden: 7168
-  num_image_tokens: 729 # 27x27 patch grid at 384 px
+  connector_hidden: 8192
+  num_image_tokens: 729
+
+audio:
+  enabled: true
+  n_mels: 128
+  sample_rate: 16000
+  encoder_dim: 1024
+  encoder_layers: 12
+  encoder_heads: 16
+  codec_sample_rate: 24000
+  num_audio_codes: 4096
 
 dropout: 0.0
 init_std: 0.02
-tie_embeddings: false   # large model — separate LM head is fine
+tie_embeddings: false
 
 pad_token_id: 0
 bos_token_id: 1

@@ -1,0 +1,55 @@
+# --------------------------------------------------------------------------
+# Code-screenshot pretraining (Forge only).
+#
+# Short warm-up stage that exposes the freshly-instantiated vision tower
+# to syntax-highlighted code screenshots paired with their source text.
+# The loss is plain next-token-prediction over the source code, conditioned
+# on the rendered image — so the vision tower learns to "read" code.
+# --------------------------------------------------------------------------
+
+stage: "code_screenshot_pretrain"
+
+sequence_length: 4096
+
+data:
+  mix:
+    - { name: "synthetic_code_screenshots", weight: 1.0 }
+  shuffle_buffer: 10000
+  num_workers: 2
+
+# We don't update the LM aggressively here — only the vision tower and
+# its connector. Freezing the LM is encouraged via the LoRA-style mask
+# in the training script (target_modules = ["vision_tower", "vision_connector"]).
+freeze_lm: true
+
+optimizer:
+  name: "adamw"
+  lr: 1.0e-4
+  weight_decay: 0.0
+  betas: [0.9, 0.95]
+  eps: 1.0e-8
+
+scheduler:
+  name: "cosine_with_warmup"
+  warmup_steps: 100
+  min_lr: 1.0e-5
+
+micro_batch_size: 4
+global_batch_size: 64
+max_steps: 5000
+eval_every: 200
+save_every: 1000
+log_every: 25
+
+grad_clip: 1.0
+mixed_precision: "bf16"
+gradient_checkpointing: true
+
+distributed:
+  backend: "fsdp"
+  fsdp:
+    sharding_strategy: "FULL_SHARD"
+
+seed: 42
+output_dir: "outputs/code_screenshot"
+resume_from: "outputs/long_context/latest"

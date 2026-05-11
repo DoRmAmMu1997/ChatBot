@@ -50,3 +50,19 @@ def test_load_code_review_example():
         skill_registry=skills, slash_registry=slash,
     )
     assert skills.get("code_review") is not None
+
+
+def test_load_log_triage_example():
+    repo_root = Path(__file__).resolve().parent.parent
+    manifest = repo_root / "plugins_examples" / "log_triage" / "plugin.yaml"
+    tools = ToolRegistry()
+    hooks = HookRegistry()
+    skills = SkillRegistry()
+    slash = SlashCommandRegistry()
+    load_plugin(
+        manifest,
+        tool_registry=tools, hook_registry=hooks,
+        skill_registry=skills, slash_registry=slash,
+    )
+    assert skills.get("log_triage") is not None
+    assert "/postmortem" in slash.names() or "postmortem" in slash.names()

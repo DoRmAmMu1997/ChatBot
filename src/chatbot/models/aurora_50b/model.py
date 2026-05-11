@@ -1,14 +1,21 @@
-"""Aurora-50B model — dense multimodal decoder-only Transformer.
+"""Aurora — dense omni-modal decoder-only Transformer (text + image + audio).
 
 Architecture summary:
 
-  * Vision tower (SigLIP2-style ViT) encodes images into patch features.
-  * MLP connector projects patch features into the LLM embedding space.
+  * **Vision tower** (SigLIP2-style ViT) encodes images into patch features.
+  * **Audio encoder** (Whisper-style Conformer) encodes speech into soft
+    tokens.
+  * **MLP connectors** project both modalities into the LLM embedding space.
   * The LLM is a stack of ``DecoderBlock``s using GQA + RoPE + SwiGLU.
   * At input time we *splice* image patch embeddings into the text token
-    embedding sequence wherever the special ``<image>`` token sits — this
-    is the standard interleaved-multimodal pattern used by Llama 3.2-Vision,
-    LLaVA-NeXT, Cambrian, etc.
+    embedding sequence wherever the special ``<|image|>`` token sits, and
+    audio embeddings wherever ``<|audio|>`` sits — the standard interleaved
+    multimodal pattern used by Llama 3.2-Vision, LLaVA-NeXT, GPT-4o.
+  * For audio OUTPUT, the LLM's vocabulary already contains 4096 audio
+    code tokens (``<audio:0>``…``<audio:4095>``). When the model emits a
+    span between ``<|audio_start|>`` and ``<|audio_end|>``, the inference
+    runtime collects those ids and passes them through
+    :class:`chatbot.models.audio.AudioCodec` to produce a waveform.
 
 The model is built from scratch using ``torch.nn`` primitives. No third-party
 LLM frameworks. The point is for the user (and the user's future readers)
@@ -23,6 +30,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from ..audio.encoder import AudioEncoder
 from ..common.attention import build_attention
 from ..common.ffn import SwiGLU
 from ..common.kv_cache import KVCache
@@ -36,27 +44,38 @@ from .config import AuroraConfig
 
 # Token id sentinels — Aurora's tokenizer adds these at training time.
 # They are not magic numbers; the model just needs *some* placeholder.
-IMAGE_PLACEHOLDER_TOKEN = "<image>"
+IMAGE_PLACEHOLDER_TOKEN = "<|image|>"
+AUDIO_PLACEHOLDER_TOKEN = "<|audio|>"
 
 
 class AuroraForCausalLM(nn.Module):
-    """Aurora-50B: ``LM(text) + ViT(image) + MLPConnector → CausalLM``.
+    """Aurora: ``LM(text) + ViT(image) + AudioEncoder(speech) → CausalLM``.
 
-    Two ways to call it:
+    Call signatures:
 
-    1. Pure text:    ``logits = model(input_ids)``.
-    2. With images:  ``logits = model(input_ids, images=...)``.
+    1. Pure text:        ``logits = model(input_ids)``.
+    2. With images:      ``logits = model(input_ids, images=...)``.
+    3. With audio:       ``logits = model(input_ids, audio=...)``.
+    4. With both:        ``logits = model(input_ids, images=..., audio=...)``.
 
-    The model finds every position where ``input_ids == image_token_id`` and
-    replaces that token's embedding with the corresponding image's projected
-    patch sequence (one image → many tokens). The downstream layers don't
-    need to know anything about images — they just see a sequence.
+    The model finds every position where ``input_ids == image_token_id`` /
+    ``audio_token_id`` and replaces that token's embedding with the
+    corresponding image's projected patch sequence or audio encoder
+    output (one placeholder → many tokens). Downstream layers don't need
+    to know anything about modalities — they just see a sequence.
     """
 
-    def __init__(self, config: AuroraConfig, *, image_token_id: Optional[int] = None):
+    def __init__(
+        self,
+        config: AuroraConfig,
+        *,
+        image_token_id: Optional[int] = None,
+        audio_token_id: Optional[int] = None,
+    ):
         super().__init__()
         self.config = config
         self.image_token_id = image_token_id
+        self.audio_token_id = audio_token_id
 
         # ---- Embeddings ----
         self.token_embedding = nn.Embedding(config.vocab_size, config.d_model)
@@ -87,7 +106,7 @@ class AuroraForCausalLM(nn.Module):
                 depth=config.vision.vision_layers,
                 num_heads=config.vision.vision_heads,
             )
-            self.connector = MLPConnector(
+            self.vision_connector = MLPConnector(
                 vision_dim=config.vision.vision_dim,
                 hidden_dim=config.vision.connector_hidden,
                 llm_dim=config.d_model,
@@ -95,7 +114,20 @@ class AuroraForCausalLM(nn.Module):
             )
         else:
             self.vision_tower = None
-            self.connector = None
+            self.vision_connector = None
+
+        # ---- Audio encoder (optional) ----
+        if config.audio.enabled:
+            self.audio_encoder = AudioEncoder(
+                llm_dim=config.d_model,
+                n_mels=config.audio.n_mels,
+                dim=config.audio.encoder_dim,
+                depth=config.audio.encoder_layers,
+                num_heads=config.audio.encoder_heads,
+                sample_rate=config.audio.sample_rate,
+            )
+        else:
+            self.audio_encoder = None
 
         self.apply(self._init_weights)
 
@@ -112,52 +144,63 @@ class AuroraForCausalLM(nn.Module):
 
     # ----- forward -----
 
+    def _splice_modality(
+        self,
+        x: torch.Tensor,
+        input_ids: torch.Tensor,
+        modality_embeddings: torch.Tensor,
+        placeholder_token_id: int,
+    ) -> torch.Tensor:
+        """Replace placeholder tokens in the text stream with modality embeddings.
+
+        ``modality_embeddings`` is ``[K, T, d_model]`` where K is the number
+        of modality items in the batch and T is the per-item token count.
+        Callers must pre-allocate exactly T placeholder slots per item in
+        ``input_ids``. We do an in-place overwrite of those slots.
+        """
+
+        positions = (input_ids == placeholder_token_id).nonzero(as_tuple=False)
+        if positions.numel() == 0:
+            return x
+        per_item = modality_embeddings.shape[1]
+        flat = modality_embeddings.reshape(-1, x.shape[-1])
+        seen = 0
+        for b, t in positions.tolist():
+            end = t + per_item
+            if end > x.shape[1]:
+                raise ValueError(
+                    f"Not enough placeholder slots for modality token {placeholder_token_id}."
+                )
+            x[b, t:end, :] = flat[seen : seen + per_item]
+            seen += per_item
+        return x
+
     def embed_inputs(
         self,
         input_ids: torch.Tensor,
         images: Optional[torch.Tensor] = None,
+        audio: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        """Token + (optional) image embedding to the residual stream."""
+        """Token + (optional) image / audio embedding to the residual stream."""
 
         x = self.token_embedding(input_ids)
-        if images is None or self.vision_tower is None or self.image_token_id is None:
-            return x
 
-        # Run images through the vision tower → connector to get a tensor of
-        # image embeddings shaped ``[B, num_imgs_per_batch, num_image_tokens, d_model]``.
-        # The simplest interface here is "one image batch == one extra dim
-        # before the per-image token sequence". We flatten the image tokens
-        # into the same time dim as text.
-        if images.dim() == 4:    # [B*K, 3, H, W] — already flat
-            visual = self.connector(self.vision_tower(images))
-            # Recover the per-batch shape: the caller is responsible for
-            # passing as many images as ``input_ids`` has ``<image>`` slots.
-        else:
-            raise ValueError("`images` must be a 4-D tensor [B*K, 3, H, W]")
+        # Images: run through ViT + connector, then splice in.
+        if images is not None and self.vision_tower is not None and self.image_token_id is not None:
+            if images.dim() != 4:
+                raise ValueError("`images` must be a 4-D tensor [B*K, 3, H, W]")
+            visual = self.vision_connector(self.vision_tower(images))  # [K, T_img, d_model]
+            x = self._splice_modality(x, input_ids, visual, self.image_token_id)
 
-        # Scatter visual tokens into the right positions.
-        image_token_id = self.image_token_id
-        image_positions = (input_ids == image_token_id).nonzero(as_tuple=False)
-        if image_positions.numel() == 0:
-            return x  # no image slots — pure text
+        # Audio: run through the audio encoder (which includes mel + projector)
+        # and splice in. Each `<|audio|>` placeholder spans the *exact* token
+        # count produced by the encoder for that clip.
+        if audio is not None and self.audio_encoder is not None and self.audio_token_id is not None:
+            if audio.dim() != 2:
+                raise ValueError("`audio` must be a 2-D waveform tensor [B*K, samples]")
+            audio_tokens = self.audio_encoder(audio)  # [K, T_audio, d_model]
+            x = self._splice_modality(x, input_ids, audio_tokens, self.audio_token_id)
 
-        # Visual is ``[K, num_image_tokens, d_model]``. We expand one image
-        # placeholder into ``num_image_tokens`` consecutive embeddings by
-        # writing them in-place into the embedding stream. Callers must
-        # pre-pad the text so there are enough placeholder slots.
-        # For simplicity we use a tight per-image overwrite at the placeholder.
-        num_image_tokens = visual.shape[1]
-        flat_visual = visual.reshape(-1, x.shape[-1])      # [K*num_image_tokens, d_model]
-        seen = 0
-        for b, t in image_positions.tolist():
-            slot_end = t + num_image_tokens
-            if slot_end > x.shape[1]:
-                raise ValueError(
-                    "Not enough <image> placeholder tokens for this image. "
-                    "Allocate exactly num_image_tokens placeholders per image."
-                )
-            x[b, t:slot_end, :] = flat_visual[seen : seen + num_image_tokens]
-            seen += num_image_tokens
         return x
 
     def forward(
@@ -165,6 +208,7 @@ class AuroraForCausalLM(nn.Module):
         input_ids: torch.Tensor,
         *,
         images: Optional[torch.Tensor] = None,
+        audio: Optional[torch.Tensor] = None,
         labels: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
         kv_cache: Optional[KVCache] = None,
@@ -172,7 +216,7 @@ class AuroraForCausalLM(nn.Module):
     ):
         batch, seq = input_ids.shape
 
-        x = self.embed_inputs(input_ids, images=images)
+        x = self.embed_inputs(input_ids, images=images, audio=audio)
 
         cos, sin = self.rope(
             seq_len=seq,
@@ -210,6 +254,7 @@ class AuroraForCausalLM(nn.Module):
         input_ids: torch.Tensor,
         *,
         images: Optional[torch.Tensor] = None,
+        audio: Optional[torch.Tensor] = None,
         max_new_tokens: int = 256,
         temperature: float = 0.7,
         top_p: float = 0.95,
@@ -223,8 +268,8 @@ class AuroraForCausalLM(nn.Module):
         eos_ids = set(eos_token_ids or [self.config.eos_token_id])
         cache = KVCache(num_layers=self.config.n_layers)
 
-        # Prefill — run the prompt once and cache everything.
-        out = self.forward(input_ids, images=images, kv_cache=cache)
+        # Prefill — run the full prompt (text + modalities) once, cache everything.
+        out = self.forward(input_ids, images=images, audio=audio, kv_cache=cache)
         next_logits = out["logits"][:, -1, :]
 
         generated = [input_ids]

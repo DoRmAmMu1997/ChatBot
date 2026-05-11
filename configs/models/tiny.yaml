@@ -1,72 +1,73 @@
 # --------------------------------------------------------------------------
 # Tiny model config (~50M parameters).
 #
-# This config is the "smoke test" tier. It exercises every code path in the
-# repo (dense + MoE + vision + plugin runtime) but is small enough to run on a
+# Smoke-test tier. Exercises every code path in the repo (dense + MoE +
+# vision + audio I/O + plugin runtime) but is small enough to run on a
 # laptop CPU or a single consumer GPU in minutes.
 #
-# Use this config to verify that the code works before you commit to renting
-# H100s. Numbers will be terrible — the goal is to confirm shapes, training
-# loops, and inference round-trips, not benchmark quality.
+# Use this config to verify that the code works before you commit to
+# renting H100s. Numbers will be terrible — the goal is to confirm shapes,
+# training loops, and inference round-trips, not benchmark quality.
 # --------------------------------------------------------------------------
 
-# Which model family this config describes.
-# "aurora" → dense multimodal, "forge" → MoE coder.
-# Tiny can wear either hat; we default to Aurora so smoke tests cover vision too.
 family: aurora
 
 # Core Transformer sizes.
-d_model: 256          # hidden dimension
+d_model: 256
 n_layers: 4
-n_heads: 8            # query heads
-n_kv_heads: 2         # KV heads (GQA); query_heads / kv_heads = group size
-head_dim: 32          # d_model / n_heads
-ffn_hidden: 768       # SwiGLU intermediate; typically ~3x d_model
-vocab_size: 32000     # tiny tokenizer
+n_heads: 8
+n_kv_heads: 2
+head_dim: 32
+ffn_hidden: 768
+# Vocab = 32K text BPE + 2048 audio codes + ~32 specials, rounded.
+vocab_size: 34112
 max_position_embeddings: 4096
 
-# Normalization + position encoding.
 rms_norm_eps: 1.0e-5
-rope_base: 10000.0    # standard short-context base
+rope_base: 10000.0
 rope_scaling:
-  type: "none"        # "none" | "yarn" | "linear"
+  type: "none"
   factor: 1.0
 
-# Dense FFN settings (used when no MoE).
 ffn:
   type: "swiglu"
   hidden: 768
 
-# Mixture-of-Experts settings (used when family=forge, ignored otherwise).
 moe:
   enabled: false
   num_routed_experts: 4
   num_shared_experts: 1
-  num_active_experts: 2     # top-k routing
+  num_active_experts: 2
   expert_hidden: 384
   router_jitter: 0.0
-  load_balancing: "aux_loss_free"  # "aux_loss" | "aux_loss_free"
+  load_balancing: "aux_loss_free"
   bias_update_speed: 1.0e-3
 
-# Multimodal settings (used when family=aurora).
+# Multimodal settings.
 vision:
   enabled: true
-  image_size: 224       # smaller than production 384 to keep tiny tier fast
+  image_size: 224
   patch_size: 14
   vision_dim: 384
   vision_layers: 6
   vision_heads: 6
   connector_hidden: 512
-  num_image_tokens: 256  # tokens per image after pooling
+  num_image_tokens: 256
 
-# Dropout and initialization.
+audio:
+  enabled: true
+  n_mels: 80
+  sample_rate: 16000
+  encoder_dim: 256
+  encoder_layers: 2
+  encoder_heads: 4
+  codec_sample_rate: 24000
+  num_audio_codes: 2048
+
 dropout: 0.0
 init_std: 0.02
-
-# Whether to tie token embeddings to the LM head.
 tie_embeddings: true
 
-# Token ids — set by the tokenizer; safe defaults shown.
 pad_token_id: 0
 bos_token_id: 1
 eos_token_id: 2

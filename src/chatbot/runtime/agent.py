@@ -221,6 +221,7 @@ def build_agent(
         registrar = BUILTIN_REGISTRARS.get(name)
         if registrar is None:
             continue
+        # Tools that respect a safety allowlist receive it from runtime config.
         if name == "builtin.filesystem":
             registrar(tool_registry, allowlist=list(safety.get("filesystem_allowlist", []) or []))
         elif name == "builtin.shell":
@@ -228,6 +229,8 @@ def build_agent(
         elif name == "builtin.http":
             registrar(tool_registry, allowlist=list(safety.get("network_allowlist", []) or []))
         else:
+            # builtin.notebook / builtin.devops / builtin.document take no
+            # per-tool safety knobs beyond the runtime config defaults.
             registrar(tool_registry)
 
     # External plugins discovered under ``plugins_dir`` and any extra paths.

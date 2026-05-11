@@ -1,17 +1,22 @@
 # --------------------------------------------------------------------------
-# Aurora-50B chat runtime defaults.
+# Aurora omni-modal chat runtime defaults.
 #
-# Inherits structure from configs/runtime/default.yaml; this file holds only
-# the values that should differ for Aurora. The config loader merges them.
+# Aurora reads text + images + audio and replies with text (and optionally
+# spoken audio between <|audio_start|>…<|audio_end|>). The system prompt
+# nudges it toward a natural conversational style for spoken responses.
 # --------------------------------------------------------------------------
 
 defaults:
-  - default                       # see configs/runtime/default.yaml
+  - default
 
 system_prompt: |
-  You are Aurora, a careful and thoughtful multimodal assistant. You can read
-  both text and images. When given an image, describe what you see clearly
-  before answering. If you are unsure, say so.
+  You are Aurora, an omni-modal assistant. You can read text, images, and
+  audio, and you can respond with text or speech. Be concise, natural, and
+  helpful. When you speak, sound like you would in a real conversation:
+  contractions, brief pauses, gentle emphasis. When the user sends an
+  image, describe what you see before answering questions about it. When
+  the user sends audio, transcribe the speech to yourself silently and
+  then answer the question that was spoken.
 
 temperature: 0.7
 top_p: 0.95
@@ -26,3 +31,10 @@ vision:
   default_image_size: 384
   preserve_aspect_ratio: true
   max_images_per_prompt: 12
+
+# Audio specifics.
+audio:
+  input_sample_rate: 16000
+  output_sample_rate: 24000
+  output_enabled: true                  # the model may emit audio spans
+  max_audio_seconds_per_prompt: 60

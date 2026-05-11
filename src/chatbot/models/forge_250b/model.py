@@ -1,4 +1,4 @@
-"""Forge-250B model — Mixture-of-Experts coder with Multi-head Latent Attention.
+"""Forge — Mixture-of-Experts coder with MLA, vision, and audio I/O.
 
 Architecture summary:
 
@@ -9,7 +9,13 @@ Architecture summary:
   * The first ``ffn.num_dense_layers`` blocks use dense SwiGLU FFNs as a
     "warm-up" — DeepSeek-V3 found this stabilizes early training. The
     remaining blocks use the fine-grained MoE FFN.
-  * No vision tower. Forge is a code/SWE specialist.
+  * **Vision tower** (small SigLIP2-style ViT, tuned for code screenshots)
+    + MLP connector splice image patches into the residual stream where
+    ``<|image|>`` placeholders sit.
+  * **Audio encoder** (Whisper-style Conformer, 8 layers) splices
+    voice-description tokens in at ``<|audio|>`` placeholders.
+  * **Audio output**: like Aurora, the LLM's vocabulary contains 4096
+    audio code tokens that the runtime decodes through the shared codec.
 
 The MoE aux losses (``aux_loss`` + ``router_z_loss``) are surfaced through
 the forward output so the training loop can sum them into the LM loss.
@@ -23,6 +29,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from ..audio.encoder import AudioEncoder
 from ..common.attention import build_attention
 from ..common.ffn import SwiGLU
 from ..common.kv_cache import KVCache, MLAKVCache
@@ -30,15 +37,29 @@ from ..common.moe import MixtureOfExperts
 from ..common.normalization import RMSNorm
 from ..common.rope import build_rotary_embedding
 from ..common.transformer import DecoderBlock
+from ..vision.connector import MLPConnector
+from ..vision.vit_encoder import ViTEncoder
 from .config import ForgeConfig
 
 
-class ForgeForCausalLM(nn.Module):
-    """Forge-250B MoE coder LLM."""
+IMAGE_PLACEHOLDER_TOKEN = "<|image|>"
+AUDIO_PLACEHOLDER_TOKEN = "<|audio|>"
 
-    def __init__(self, config: ForgeConfig):
+
+class ForgeForCausalLM(nn.Module):
+    """Forge MoE coder LLM with optional vision + audio inputs."""
+
+    def __init__(
+        self,
+        config: ForgeConfig,
+        *,
+        image_token_id: Optional[int] = None,
+        audio_token_id: Optional[int] = None,
+    ):
         super().__init__()
         self.config = config
+        self.image_token_id = image_token_id
+        self.audio_token_id = audio_token_id
 
         # ---- Embeddings ----
         self.token_embedding = nn.Embedding(config.vocab_size, config.d_model)
@@ -59,7 +80,7 @@ class ForgeForCausalLM(nn.Module):
                 # First few layers: plain SwiGLU FFN.
                 ffn = SwiGLU(config.d_model, config.ffn.hidden)
             else:
-                # Remaining layers: MoE — 128 small experts, top-8 routing,
+                # Remaining layers: MoE — 160 small experts, top-8 routing,
                 # plus one shared expert that's always active.
                 ffn = MixtureOfExperts(
                     d_model=config.d_model,
@@ -82,6 +103,43 @@ class ForgeForCausalLM(nn.Module):
         if config.tie_embeddings:
             self.lm_head.weight = self.token_embedding.weight
 
+        # ---- Vision tower (optional) ----
+        # Code screenshots, not natural images, so we size smaller than
+        # Aurora's tower: 224 px, 12 layers, 768-d.
+        if config.vision.enabled:
+            self.vision_tower = ViTEncoder(
+                image_size=config.vision.image_size,
+                patch_size=config.vision.patch_size,
+                dim=config.vision.vision_dim,
+                depth=config.vision.vision_layers,
+                num_heads=config.vision.vision_heads,
+            )
+            self.vision_connector = MLPConnector(
+                vision_dim=config.vision.vision_dim,
+                hidden_dim=config.vision.connector_hidden,
+                llm_dim=config.d_model,
+                pool=None,
+            )
+        else:
+            self.vision_tower = None
+            self.vision_connector = None
+
+        # ---- Audio encoder (optional) ----
+        # Lighter than Aurora's: 8 layers instead of 12 because Forge's
+        # audio use case (voice descriptions of bugs) is shorter and less
+        # demanding than open-domain conversation.
+        if config.audio.enabled:
+            self.audio_encoder = AudioEncoder(
+                llm_dim=config.d_model,
+                n_mels=config.audio.n_mels,
+                dim=config.audio.encoder_dim,
+                depth=config.audio.encoder_layers,
+                num_heads=config.audio.encoder_heads,
+                sample_rate=config.audio.sample_rate,
+            )
+        else:
+            self.audio_encoder = None
+
         self.apply(self._init_weights)
 
     def _init_weights(self, module: nn.Module) -> None:
@@ -93,10 +151,56 @@ class ForgeForCausalLM(nn.Module):
         elif isinstance(module, nn.Embedding):
             nn.init.normal_(module.weight, mean=0.0, std=std)
 
+    def _splice_modality(
+        self,
+        x: torch.Tensor,
+        input_ids: torch.Tensor,
+        modality_embeddings: torch.Tensor,
+        placeholder_token_id: int,
+    ) -> torch.Tensor:
+        """Same in-place splicing logic Aurora uses; see its docstring for detail."""
+
+        positions = (input_ids == placeholder_token_id).nonzero(as_tuple=False)
+        if positions.numel() == 0:
+            return x
+        per_item = modality_embeddings.shape[1]
+        flat = modality_embeddings.reshape(-1, x.shape[-1])
+        seen = 0
+        for b, t in positions.tolist():
+            end = t + per_item
+            if end > x.shape[1]:
+                raise ValueError(
+                    f"Not enough placeholder slots for modality token {placeholder_token_id}."
+                )
+            x[b, t:end, :] = flat[seen : seen + per_item]
+            seen += per_item
+        return x
+
+    def embed_inputs(
+        self,
+        input_ids: torch.Tensor,
+        images: Optional[torch.Tensor] = None,
+        audio: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        x = self.token_embedding(input_ids)
+        if images is not None and self.vision_tower is not None and self.image_token_id is not None:
+            if images.dim() != 4:
+                raise ValueError("`images` must be a 4-D tensor [B*K, 3, H, W]")
+            visual = self.vision_connector(self.vision_tower(images))
+            x = self._splice_modality(x, input_ids, visual, self.image_token_id)
+        if audio is not None and self.audio_encoder is not None and self.audio_token_id is not None:
+            if audio.dim() != 2:
+                raise ValueError("`audio` must be a 2-D waveform tensor [B*K, samples]")
+            audio_tokens = self.audio_encoder(audio)
+            x = self._splice_modality(x, input_ids, audio_tokens, self.audio_token_id)
+        return x
+
     def forward(
         self,
         input_ids: torch.Tensor,
         *,
+        images: Optional[torch.Tensor] = None,
+        audio: Optional[torch.Tensor] = None,
         labels: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
         kv_cache: Optional[MLAKVCache] = None,
@@ -104,7 +208,7 @@ class ForgeForCausalLM(nn.Module):
     ):
         batch, seq = input_ids.shape
 
-        x = self.token_embedding(input_ids)
+        x = self.embed_inputs(input_ids, images=images, audio=audio)
         cos, sin = self.rope(seq_len=seq, device=x.device, dtype=x.dtype, offset=position_offset)
 
         total_aux = x.new_zeros(())
@@ -145,6 +249,8 @@ class ForgeForCausalLM(nn.Module):
         self,
         input_ids: torch.Tensor,
         *,
+        images: Optional[torch.Tensor] = None,
+        audio: Optional[torch.Tensor] = None,
         max_new_tokens: int = 256,
         temperature: float = 0.3,
         top_p: float = 0.95,
@@ -156,7 +262,7 @@ class ForgeForCausalLM(nn.Module):
         eos_ids = set(eos_token_ids or [self.config.eos_token_id])
         cache = MLAKVCache(num_layers=self.config.n_layers)
 
-        out = self.forward(input_ids, kv_cache=cache)
+        out = self.forward(input_ids, images=images, audio=audio, kv_cache=cache)
         next_logits = out["logits"][:, -1, :]
 
         generated = [input_ids]

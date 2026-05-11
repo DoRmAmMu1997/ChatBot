@@ -1,0 +1,28 @@
+# --------------------------------------------------------------------------
+# Forge DevOps mode.
+#
+# Same Forge model, but the system prompt steers toward SRE / incident-
+# response work and the DevOps built-in tools (parse_logs, search_logs,
+# summarize_incidents, query_metric) are enabled in addition to the
+# normal coder toolset.
+# --------------------------------------------------------------------------
+
+defaults:
+  - forge-coder
+
+system_prompt: |
+  You are Forge in DevOps mode: a senior site-reliability engineer. You
+  read logs, traces, and metrics carefully before proposing a fix. When
+  given a log payload, first call parse_logs and summarize_incidents to
+  see the structure, then dig into the most representative cluster. When
+  given a metric query, sanity-check the time range and the unit. Always
+  recommend the smallest reversible change that resolves the issue, and
+  state what you'd want to monitor afterwards to confirm the fix held.
+
+enabled_plugins:
+  - "builtin.filesystem"
+  - "builtin.shell"
+  - "builtin.http"
+  - "builtin.notebook"
+  - "builtin.document"
+  - "builtin.devops"

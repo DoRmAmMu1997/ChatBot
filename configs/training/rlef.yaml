@@ -1,0 +1,57 @@
+# --------------------------------------------------------------------------
+# Reinforcement Learning from Execution Feedback (Forge only).
+#
+# The SWE-bench-Verified lever. Samples G rollouts per problem, scores
+# each rollout by *actually running the project's tests* (or a heuristic
+# proxy in --dry-run mode), and applies GRPO-style REINFORCE with a
+# leave-one-out baseline.
+#
+# Run this AFTER DevOps SFT — Forge should already know how to use tools
+# and edit code carefully before the RL signal kicks in.
+# --------------------------------------------------------------------------
+
+stage: "rlef"
+
+# Per-rollout settings.
+group_size: 4           # rollouts per problem (more = better baseline, more compute)
+max_new_tokens: 1024    # cap on agent rollout length per problem
+
+# Standard optimization hyperparams.
+optimizer:
+  name: "adamw"
+  lr: 1.0e-6            # very low — RL is unforgiving with large LR
+  weight_decay: 0.0
+  betas: [0.9, 0.95]
+  eps: 1.0e-8
+
+scheduler:
+  name: "cosine_with_warmup"
+  warmup_steps: 20
+  min_lr: 1.0e-7
+
+grad_clip: 1.0
+max_steps: 2000
+log_every: 25
+save_every: 250
+
+# Data and problem sources. The synthetic source is always available;
+# the real SWE-bench / TaskBench / RepoFix entries require HF datasets
+# downloaded ahead of time and a Docker sandbox for the test runner.
+data:
+  mix:
+    - { name: "synthetic_swebench_traces", weight: 0.40 }
+    - { name: "swe_bench_verified_train",  weight: 0.30 }
+    - { name: "taskbench_code",            weight: 0.20 }
+    - { name: "repofix",                   weight: 0.10 }
+
+mixed_precision: "bf16"
+gradient_checkpointing: true
+
+distributed:
+  backend: "fsdp"
+  fsdp:
+    sharding_strategy: "FULL_SHARD"
+
+seed: 42
+output_dir: "outputs/rlef"
+resume_from: "outputs/devops_sft/latest"

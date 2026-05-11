@@ -1,31 +1,39 @@
-# Chatbot — Aurora-50B & Forge-250B
+# Chatbot — Aurora & Forge
 
 Two from-scratch PyTorch large language models with a Claude-Code-style
-plugin runtime. The whole thing is meant to be **readable** — every block
+plugin runtime, audio I/O, vision, and a DevOps tool layer. Every block
 has beginner-friendly comments, every config knob is documented, and the
-training pipeline runs end-to-end on a laptop at the "tiny" tier before
-you commit to renting GPUs.
+full training pipeline runs end-to-end on a laptop at the "tiny" tier
+before you commit to renting GPUs.
 
-| Model        | Size                          | Specialization                                   | Context |
-|--------------|-------------------------------|--------------------------------------------------|---------|
-| **Aurora-50B** | 50 B dense, multimodal       | Text + images (Sonnet-class general assistant)   | 256K     |
-| **Forge-250B** | 250 B MoE (~25 B active)     | Coding & software engineering (Opus-class)       | 1M       |
-| **Tiny (~50M)** | Same architecture, miniature | Smoke-testing & education                        | 4K       |
+| Model | Size | Modalities | Specialization | Context |
+|---|---|---|---|---|
+| **Aurora** | ~72 B dense | text + image + audio in, text + audio out | Omni-modal assistant (GPT-4o-class) | 256K |
+| **Forge** | ~320 B MoE / ~31 B active | text + image + audio + video + PDF in, text out (audio optional) | Coding, software engineering, DevOps (Opus-class) | 1M |
+| **Tiny (~50 M)** | Same architectures, miniaturised | All modalities | Smoke-testing & education | 4K |
 
 ## What ships in this repo
 
 * **Original architectures** for both models. Every block (RMSNorm, RoPE
   + YaRN, GQA, MLA, SwiGLU, fine-grained MoE with auxiliary-loss-free
-  load balancing, SigLIP-style vision tower, MLP connector) is implemented
-  with `torch.nn` primitives. No `transformers` model imports.
-* **Tokenizers**: byte-level BPE, trained from text via `scripts/train_tokenizer.py`.
-* **Training pipelines**: pretraining, long-context extension, SFT, DPO,
-  tool-use SFT, and LoRA/QLoRA fine-tuning. FSDP2 and DeepSpeed-ZeRO-3 supported.
+  load balancing, SigLIP-style vision tower, Whisper-style audio encoder,
+  EnCodec-style audio codec) is implemented with `torch.nn` primitives.
+  No `transformers` model imports.
+* **Tokenizers**: byte-level BPE + 4096 audio code tokens trained via
+  `scripts/train_tokenizer.py`.
+* **Training pipelines**: text pretraining, long-context extension, audio
+  codec pretrain, omni-modal pretrain, code-screenshot pretrain, SFT,
+  omni-SFT, DPO, tool-use SFT, **DevOps SFT**, **RLEF (reinforcement
+  learning from execution feedback)**, plus LoRA/QLoRA fine-tuning.
+  FSDP2 and DeepSpeed-ZeRO-3 supported.
 * **Inference**: KV-cache sampler (temperature / top-p / top-k / min-p /
-  repetition penalty), multimodal chat for Aurora, minimal OpenAI-compatible HTTP server.
+  repetition penalty), multimodal chat with audio in/out + video frame
+  sampling, minimal OpenAI-compatible HTTP server.
 * **Claude-Code-style runtime** for Forge: agent loop, built-in tools
-  (filesystem, shell, http, notebook), MCP-protocol client, plugin
-  manifests, markdown skills, lifecycle hooks, slash commands, sub-agents.
+  (filesystem, shell, http, notebook, **PDF/document parser**,
+  **DevOps log + metric tools**), MCP-protocol client, plugin manifests,
+  markdown skills (including a ready-to-use `log_triage` skill),
+  lifecycle hooks, slash commands (including `/postmortem`), sub-agents.
 * **Benchmark runners**: HumanEval, MBPP, LiveCodeBench, MMLU, GSM8K,
   SWE-bench Lite.
 * **No trained checkpoints**. The repo is functional code; training is

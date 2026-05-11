@@ -1,0 +1,10 @@
+name: log_triage
+version: 0.1.0
+description: SRE-focused skill + /postmortem slash command for incident triage.
+tools: []
+hooks: null
+skills:
+  - skill.md
+slash_commands:
+  - command: /postmortem
+    handler: handlers.py::postmortem

@@ -1,9 +1,12 @@
-"""Strongly-typed config dataclass for Aurora-50B."""
+"""Strongly-typed config dataclass for Aurora.
+
+Aurora is the omni-modal model: text + image + audio in, text + audio out.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from omegaconf import DictConfig, OmegaConf
 
@@ -23,47 +26,61 @@ class _Vision:
     vision_dim: int = 1152
     vision_layers: int = 27
     vision_heads: int = 16
-    connector_hidden: int = 7168
+    connector_hidden: int = 8192
     num_image_tokens: int = 729
 
 
 @dataclass
-class AuroraConfig:
-    """Hyperparameters for the Aurora-50B language stack and vision tower."""
+class _Audio:
+    """Settings for the speech-in encoder and the speech-out codec."""
 
-    d_model: int = 7168
-    n_layers: int = 64
-    n_heads: int = 56
+    enabled: bool = True
+    # Encoder (speech-in) settings.
+    n_mels: int = 128
+    sample_rate: int = 16000
+    encoder_dim: int = 1024
+    encoder_layers: int = 12
+    encoder_heads: int = 16
+    # Codec (speech-out) settings — must match the audio codec model.
+    codec_sample_rate: int = 24000
+    num_audio_codes: int = 4096
+
+
+@dataclass
+class AuroraConfig:
+    """Hyperparameters for the Aurora omni-modal LLM, vision tower and audio I/O."""
+
+    d_model: int = 8192
+    n_layers: int = 72
+    n_heads: int = 64
     n_kv_heads: int = 8
     head_dim: int = 128
-    ffn_hidden: int = 24576
-    vocab_size: int = 131072
+    ffn_hidden: int = 28672
+    # The vocab includes text + 4096 audio code tokens + audio/image specials.
+    # Default 132096 = 128K text BPE + 4096 audio + ~64 spec slots rounded.
+    vocab_size: int = 132096
     max_position_embeddings: int = 262144
     rms_norm_eps: float = 1.0e-5
     rope_base: float = 2000000.0
     rope_scaling: _RopeScaling = field(default_factory=_RopeScaling)
     vision: _Vision = field(default_factory=_Vision)
+    audio: _Audio = field(default_factory=_Audio)
     dropout: float = 0.0
     init_std: float = 0.02
     tie_embeddings: bool = False
     pad_token_id: int = 0
     bos_token_id: int = 1
     eos_token_id: int = 2
-
-    # Attention variant. Aurora uses GQA; the dataclass keeps the field so
-    # downstream code that branches on it doesn't need to special-case Aurora.
     attention_variant: str = "gqa"
 
 
 def aurora_config_from_yaml(cfg: DictConfig | Dict[str, Any]) -> AuroraConfig:
-    """Build an :class:`AuroraConfig` from a YAML-loaded config block.
-
-    Accepts either an OmegaConf ``DictConfig`` or a plain ``dict``.
-    """
+    """Build an :class:`AuroraConfig` from a YAML-loaded config block."""
 
     raw = OmegaConf.to_container(cfg, resolve=True) if isinstance(cfg, DictConfig) else cfg
     rope_scaling = _RopeScaling(**(raw.get("rope_scaling") or {}))
     vision = _Vision(**(raw.get("vision") or {}))
+    audio = _Audio(**(raw.get("audio") or {}))
     attention_variant = "gqa"
     if raw.get("attention"):
         attention_variant = str(raw["attention"].get("variant", "gqa"))
@@ -80,6 +97,7 @@ def aurora_config_from_yaml(cfg: DictConfig | Dict[str, Any]) -> AuroraConfig:
         rope_base=float(raw.get("rope_base", 10000.0)),
         rope_scaling=rope_scaling,
         vision=vision,
+        audio=audio,
         dropout=float(raw.get("dropout", 0.0)),
         init_std=float(raw.get("init_std", 0.02)),
         tie_embeddings=bool(raw.get("tie_embeddings", False)),

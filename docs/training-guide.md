@@ -4,6 +4,35 @@ Step-by-step instructions for taking either model from "no weights" to
 "useful checkpoint". The repo ships **no checkpoints** — every weight
 file is produced on your hardware by running the stages below.
 
+## Training stages at a glance
+
+Aurora (omni-modal):
+
+1. Tokenizer training
+2. Audio codec autoencoder pretrain
+3. Text pretrain (short context, 8K)
+4. Long-context extension (→ 256K)
+5. Omni-modal pretrain (text + image + audio interleaved)
+6. SFT
+7. Omni-SFT (voice-instruction tuning)
+8. DPO
+
+Forge (coder + DevOps):
+
+1. Tokenizer training
+2. Audio codec autoencoder pretrain (shared with Aurora)
+3. Text pretrain (short context)
+4. Long-context extension (→ 1M)
+5. Code-screenshot pretrain (vision tower warm-up)
+6. SFT
+7. DPO
+8. Tool-use SFT
+9. DevOps SFT (logs / incidents)
+10. RLEF (reinforcement learning from execution feedback)
+
+The same scripts under `scripts/` drive each stage; the config file is
+what changes between them.
+
 ## Step 0 — set up your environment
 
 ```powershell

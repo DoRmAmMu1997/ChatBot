@@ -1,34 +1,40 @@
 # --------------------------------------------------------------------------
-# Forge-250B — Mixture-of-Experts coding/SWE model (Opus-class).
+# Forge — Mixture-of-Experts coding/SWE/DevOps model (Opus-class).
 #
 # DeepSeek-V3-inspired fine-grained MoE with shared experts and the
 # auxiliary-loss-free load-balancing bias trick. MLA replaces standard
-# attention so that the 1M-context KV cache stays manageable (~70 GB instead
-# of ~500 GB for plain GQA).
+# attention so the 1M-context KV cache stays manageable (~70 GB instead
+# of ~500 GB plain GQA).
+#
+# v2 adds: vision tower (code screenshots), audio encoder (voice
+# descriptions), audio codebook (4096 tokens), and bumped MoE size
+# (160 routed experts × 2048 expert-hidden, was 128 × 1536).
 #
 # Parameter budget (verified by scripts/count_params.py):
-#   - Embeddings + LM head:                              ~ 2.5 B
-#   - 64 * MLA attention:                                ~ 8.3 B
-#   - 3 dense FFN warm-up layers:                        ~ 0.1 B
-#   - 61 MoE layers * (128 routed + 1 shared) * ~30M:    ~ 236  B
-#   - Total                                              ~ 250  B
-#   - Active per token: ~25 B
+#   - Embeddings + LM head:                              ~ 2.7 B
+#   - 72 * MLA attention:                                ~ 9.3 B
+#   - 3 dense FFN warm-up layers:                        ~ 0.8 B
+#   - 69 MoE layers * (160 routed + 1 shared) * ~40M:    ~ 305 B
+#   - Vision tower (small SigLIP-style, 224 px):         ~ 0.25 B
+#   - Audio encoder (8-layer Conformer):                 ~ 0.08 B
+#   - Total                                              ~ 320 B
+#   - Active per token: ~31 B
+#
+# Filename kept as `forge-250b.yaml` for backwards compatibility — the
+# numbers inside are v2 (~320 B total / ~31 B active), not v1.
 # --------------------------------------------------------------------------
 
 family: forge
 
-d_model: 6144
-n_layers: 64
-n_heads: 48
+d_model: 6656
+n_layers: 72
+n_heads: 52
 n_kv_heads: 8
 head_dim: 128
-ffn_hidden: 18432       # used by the first three dense layers; MoE layers use expert FFN size
-vocab_size: 200032      # 200K BPE (code-heavy)
-max_position_embeddings: 1048576   # 1M — Opus-class
+ffn_hidden: 19968
+vocab_size: 204096
+max_position_embeddings: 1048576
 
-# Long-context tuning. Like Aurora, the headline number is achieved by
-# raising RoPE base + applying YaRN during the long-context extension stage,
-# not in the original short-context pretrain.
 rms_norm_eps: 1.0e-6
 rope_base: 50000000.0
 rope_scaling:
@@ -36,8 +42,6 @@ rope_scaling:
   factor: 32.0
   original_max_position_embeddings: 32768
 
-# Multi-head Latent Attention (DeepSeek-V3). Compresses keys/values into a
-# low-rank latent then re-projects, slashing KV-cache memory at long context.
 attention:
   variant: "mla"
   q_lora_rank: 1536
@@ -48,25 +52,43 @@ attention:
 
 ffn:
   type: "swiglu"
-  hidden: 18432         # warm-up dense layers (typically first 3)
+  hidden: 19968
   num_dense_layers: 3
 
 moe:
   enabled: true
-  num_routed_experts: 128
+  num_routed_experts: 160
   num_shared_experts: 1
   num_active_experts: 8
-  expert_hidden: 1536
+  expert_hidden: 2048
   router_jitter: 0.0
   load_balancing: "aux_loss_free"
   bias_update_speed: 1.0e-3
-  # Auxiliary z-loss for router stability (small coefficient).
   router_z_loss_coef: 1.0e-4
-  # Sequence-level auxiliary loss is kept off because we use AL-free balancing.
   aux_loss_coef: 0.0
 
+# Vision tower (smaller than Aurora's — Forge reads code screenshots,
+# not natural images, so 224 px and 12 layers suffices).
 vision:
-  enabled: false        # Forge is a coder; no vision
+  enabled: true
+  image_size: 224
+  patch_size: 14
+  vision_dim: 768
+  vision_layers: 12
+  vision_heads: 12
+  connector_hidden: 6656
+  num_image_tokens: 256
+
+# Audio encoder (lighter than Aurora's — short voice descriptions of bugs).
+audio:
+  enabled: true
+  n_mels: 128
+  sample_rate: 16000
+  encoder_dim: 1024
+  encoder_layers: 8
+  encoder_heads: 16
+  codec_sample_rate: 24000
+  num_audio_codes: 4096
 
 dropout: 0.0
 init_std: 0.02

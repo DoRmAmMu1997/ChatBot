@@ -1,50 +1,62 @@
-# Forge-250B architecture
+# Forge architecture (MoE coder, ~320B total / ~31B active)
 
-A ~250B-total / ~25B-active-per-token Mixture-of-Experts decoder-only
-Transformer specialized for code and software engineering tasks. Pairs
-DeepSeek-V3-style fine-grained MoE with Multi-head Latent Attention (MLA)
-so a 1M-token context is computationally viable.
+A fine-grained Mixture-of-Experts decoder-only Transformer specialized
+for code, software engineering, and DevOps tasks. Pairs DeepSeek-V3-style
+fine-grained MoE with Multi-head Latent Attention (MLA) so a 1M-token
+context is computationally viable. v2 adds vision (code screenshots) +
+audio (voice descriptions). The file is still called
+`architecture-forge-250b.md` for backwards compatibility, but the numbers
+below are the v2 (~320B / ~31B active) shape.
 
 ## Big picture
 
 ```
-   token ids ─▶ Embedding (vocab 200K, 6144-d)
-                       │
+   screenshots / videos ─▶ small Vision Tower (224 px, 12-layer ViT)
+                              │ patch features
+                              ▼
+                       MLP Connector → 256 image tokens / image
+                              │
+   voice descriptions ──▶ Audio Encoder (8-layer Conformer)
+                              │ ~50 tokens / second
+                              ▼
+   token ids ─▶ Embedding (vocab 204K — text BPE + 4096 audio codes)
+                              │
               ┌── layers 0..2 ──┐         dense FFN warm-up
               │ MLA attention   │         (DeepSeek V3 trick: stabilizes
               │ SwiGLU FFN      │          early training)
               └─────────────────┘
-                       │
-              ┌── layers 3..63 ──────────────────────────┐
+                              │
+              ┌── layers 3..71 ──────────────────────────┐
               │ MLA attention                            │
               │                                          │
               │ MoE FFN                                  │
-              │   ├ router: top-8 of 128 routed experts  │
+              │   ├ router: top-8 of 160 routed experts  │
               │   ├ shared expert (always on)            │
               │   └ AL-free load balancing (bias trick)  │
               └──────────────────────────────────────────┘
-                       │
-                  RMSNorm → LM head → logits
+                              │
+                         RMSNorm → LM head → logits
+                              │
+                      audio-code spans → shared AudioCodec
 ```
 
 ## Why MoE?
 
-A dense 250B Transformer is wildly expensive per token (every parameter
+A dense 320B Transformer is wildly expensive per token (every parameter
 participates in every step). MoE keeps the same "knowledge" capacity but
 only routes each token through a handful of specialist FFNs. Practical
-shape for Forge:
+shape for Forge v2:
 
-* 128 routed expert FFNs per MoE layer, each FFN-hidden 1536.
-* 8 routed experts active per token + 1 shared expert always on.
-* Active params per token ≈ 25 B (out of 250 B total).
-* The shared expert gives every token a basic "general" path so the
-  router doesn't have to invent one.
+* **160 routed expert FFNs** per MoE layer, each FFN-hidden 2048
+  (was 128 × 1536 in v1).
+* **8 routed experts active per token + 1 shared expert** always on.
+* **Active params per token ≈ 31 B** (out of ~320 B total).
 
 ## Why MLA?
 
-The naive KV cache for a 1M-token context with normal GQA would be
-hundreds of gigabytes per request — fiction, not engineering. MLA stores
-a compressed latent (`kv_lora_rank = 512`) plus a tiny RoPE-only key
+A 1M-context naive GQA KV cache would be hundreds of gigabytes per
+request — fiction, not engineering. MLA stores a compressed latent
+(`kv_lora_rank = 512`) plus a tiny RoPE-only key
 (`qk_rope_head_dim = 64`) per token. Re-expansion to per-head K and V
 happens on the fly during attention:
 
@@ -55,52 +67,70 @@ cached_per_token ≈ kv_lora_rank + qk_rope_head_dim
 
 full-1M cache    ≈ 576 × 1_048_576 × 2 bytes
                   ≈ 1.1 GB per attention layer
-                  × 64 layers
-                  ≈ ~70 GB / request
+                  × 72 layers
+                  ≈ ~80 GB / request
 ```
 
 That's the headline number. The same context in plain GQA would be ~10x
 larger.
 
+## Multimodal inputs
+
+| Modality | How Forge ingests it |
+|---|---|
+| Screenshot | Vision tower → `<\|image\|>` splice. |
+| Screen recording / GIF / WebP | `data.video_processing.sample_video_frames` extracts N frames; each becomes one `<\|image\|>`. |
+| Voice description | Audio encoder → `<\|audio\|>` splice. |
+| PDF / design doc | Runtime `parse_document` tool (uses `pypdf`) extracts text + image references and feeds them back through the chat. |
+| Long pasted logs | Plain text. The DevOps tools below do the heavy parsing. |
+
+## DevOps capabilities
+
+Forge ships with a `builtin.devops` toolset (enabled by default in
+`configs/runtime/forge-devops.yaml`):
+
+| Tool | Use |
+|---|---|
+| `parse_logs` | Parse a payload (text or path) into structured records — JSON-lines, syslog, K8s, Apache combined, free-form. |
+| `tail_log_file` | Last-N lines of a file with optional level filter. |
+| `search_logs` | Regex search across a tree of log files with context windows. |
+| `summarize_incidents` | Cluster records by normalized message (strip IDs / IPs / numbers); return top-K. |
+| `query_metric` | PromQL-style metrics query — stub backend by default; set `CHATBOT_METRICS_URL` to forward to a real Prometheus. |
+
+Plus a `log_triage` skill in `plugins_examples/log_triage/` that
+auto-prefixes when the user message mentions logs / stack traces /
+incidents.
+
 ## Configuration knobs (highlights)
 
 | Knob | Default | Why |
 |---|---|---|
-| `d_model` | 6144 | Residual width — narrower than Aurora because the FFN capacity is in MoE. |
-| `n_layers` | 64 | 3 dense + 61 MoE. |
+| `d_model` | 6656 | Residual width — bumped from 6144. |
+| `n_layers` | 72 | 3 dense + 69 MoE. |
 | `attention.variant` | `mla` | The whole point. |
 | `attention.kv_lora_rank` | 512 | The "cache size per token". |
-| `moe.num_routed_experts` | 128 | Pool of specialists. |
+| `moe.num_routed_experts` | 160 | Pool of specialists (was 128). |
 | `moe.num_active_experts` | 8 | Top-k routing. |
-| `moe.expert_hidden` | 1536 | Each expert FFN is small. |
+| `moe.expert_hidden` | 2048 | Each expert FFN is small but slightly fatter than v1. |
 | `moe.load_balancing` | `aux_loss_free` | DeepSeek's bias trick. |
-| `vocab_size` | 200032 | 200K BPE — generous because code has many rare tokens. |
+| `vocab_size` | 204096 | 200K text BPE + 4096 audio codes. |
 | `max_position_embeddings` | 1048576 | 1M context — Opus-class. |
-| `rope_base` | 50,000,000 | Tuned for the 1M window. |
+| `vision.image_size` | 224 | Smaller than Aurora; code screenshots don't need 384. |
+| `vision.num_image_tokens` | 256 | 16×16 patch grid. |
+| `audio.encoder_layers` | 8 | Lighter than Aurora's 12. |
 
-## The plugin / skill / tool surface
+## How to train Forge
 
-Forge ships with a Claude-Code-style runtime (`src/chatbot/runtime/`). See
-`docs/plugin-system.md` for the full reference. Highlights:
+See `docs/training-guide.md` for full details. Forge's pipeline:
 
-* Built-in tools: filesystem, shell, http, notebook.
-* MCP client for connecting to any MCP server.
-* Markdown skills auto-prefixed into the system prompt by trigger match.
-* Pre/post-tool, on-message, and on-stop hooks for redaction / logging.
-* Slash commands (`/help`, `/skills`, `/tools`, plus plugin-provided ones).
-* Subagent spawning with isolated tool subsets.
-
-## How to train Forge-250B
-
-See `docs/training-guide.md` for full details. Forge's pipeline is the same
-as Aurora's plus one extra stage at the end:
-
-1. Train the 200K code-heavy BPE tokenizer.
-2. Pretrain at 8K context (mostly code + math + a slice of general web).
-3. Long-context extension to 1M (repo-packed sequences dominate).
-4. SFT.
-5. DPO.
-6. Tool-use SFT — teaches the model to emit clean `<|tool_call|>` blocks
-   that the runtime can dispatch.
-
-The model code lives in `src/chatbot/models/forge_250b/`.
+1. Tokenizer (200K BPE + 4096 audio codes).
+2. Audio codec autoencoder pretrain (shared with Aurora).
+3. Text pretrain at 8K (mostly code + math + a slice of general web).
+4. Long-context extension to 1M (repo-packed sequences dominate).
+5. Code-screenshot pretrain (vision tower warm-up).
+6. SFT.
+7. DPO.
+8. Tool-use SFT.
+9. **DevOps SFT** (new) — logs / incidents / postmortems.
+10. **RLEF** (new) — reinforcement learning from execution feedback;
+    the key SWE-Bench-Verified lever.
