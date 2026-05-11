@@ -1,0 +1,8 @@
+name: code_review
+version: 0.1.0
+description: Adds a skill that guides the model through structured code review.
+tools: []
+hooks: null
+skills:
+  - skill.md
+slash_commands: []

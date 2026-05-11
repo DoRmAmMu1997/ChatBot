@@ -1,0 +1,77 @@
+# --------------------------------------------------------------------------
+# Forge-250B — Mixture-of-Experts coding/SWE model (Opus-class).
+#
+# DeepSeek-V3-inspired fine-grained MoE with shared experts and the
+# auxiliary-loss-free load-balancing bias trick. MLA replaces standard
+# attention so that the 1M-context KV cache stays manageable (~70 GB instead
+# of ~500 GB for plain GQA).
+#
+# Parameter budget (verified by scripts/count_params.py):
+#   - Embeddings + LM head:                              ~ 2.5 B
+#   - 64 * MLA attention:                                ~ 8.3 B
+#   - 3 dense FFN warm-up layers:                        ~ 0.1 B
+#   - 61 MoE layers * (128 routed + 1 shared) * ~30M:    ~ 236  B
+#   - Total                                              ~ 250  B
+#   - Active per token: ~25 B
+# --------------------------------------------------------------------------
+
+family: forge
+
+d_model: 6144
+n_layers: 64
+n_heads: 48
+n_kv_heads: 8
+head_dim: 128
+ffn_hidden: 18432       # used by the first three dense layers; MoE layers use expert FFN size
+vocab_size: 200032      # 200K BPE (code-heavy)
+max_position_embeddings: 1048576   # 1M — Opus-class
+
+# Long-context tuning. Like Aurora, the headline number is achieved by
+# raising RoPE base + applying YaRN during the long-context extension stage,
+# not in the original short-context pretrain.
+rms_norm_eps: 1.0e-6
+rope_base: 50000000.0
+rope_scaling:
+  type: "yarn"
+  factor: 32.0
+  original_max_position_embeddings: 32768
+
+# Multi-head Latent Attention (DeepSeek-V3). Compresses keys/values into a
+# low-rank latent then re-projects, slashing KV-cache memory at long context.
+attention:
+  variant: "mla"
+  q_lora_rank: 1536
+  kv_lora_rank: 512
+  qk_nope_head_dim: 128
+  qk_rope_head_dim: 64
+  v_head_dim: 128
+
+ffn:
+  type: "swiglu"
+  hidden: 18432         # warm-up dense layers (typically first 3)
+  num_dense_layers: 3
+
+moe:
+  enabled: true
+  num_routed_experts: 128
+  num_shared_experts: 1
+  num_active_experts: 8
+  expert_hidden: 1536
+  router_jitter: 0.0
+  load_balancing: "aux_loss_free"
+  bias_update_speed: 1.0e-3
+  # Auxiliary z-loss for router stability (small coefficient).
+  router_z_loss_coef: 1.0e-4
+  # Sequence-level auxiliary loss is kept off because we use AL-free balancing.
+  aux_loss_coef: 0.0
+
+vision:
+  enabled: false        # Forge is a coder; no vision
+
+dropout: 0.0
+init_std: 0.02
+tie_embeddings: false
+
+pad_token_id: 0
+bos_token_id: 1
+eos_token_id: 2

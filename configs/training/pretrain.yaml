@@ -1,0 +1,76 @@
+# --------------------------------------------------------------------------
+# Pretraining config (next-token prediction on raw text + image-text pairs).
+#
+# This config covers the *short-context* pretraining stage. Long-context
+# extension uses configs/training/long_context.yaml.
+# --------------------------------------------------------------------------
+
+stage: "pretrain"
+
+# Sequence length used during this stage. Keeping it short (8K) makes
+# attention memory tractable; we extend later via the long_context stage.
+sequence_length: 8192
+
+# Optimizer.
+optimizer:
+  name: "adamw"
+  lr: 3.0e-4
+  weight_decay: 0.1
+  betas: [0.9, 0.95]
+  eps: 1.0e-8
+
+# LR schedule. Linear warmup → cosine decay to a small floor.
+scheduler:
+  name: "cosine_with_warmup"
+  warmup_steps: 2000
+  min_lr: 3.0e-5
+
+# Gradients.
+grad_clip: 1.0
+grad_accumulation: 1
+
+# Batch sizing. micro_batch_size is per-GPU; global_batch_size determines
+# how many gradient accumulations are needed (auto-derived at runtime).
+micro_batch_size: 4
+global_batch_size: 1024
+
+# Training horizon.
+max_steps: 300000
+eval_every: 1000
+save_every: 5000
+log_every: 25
+
+# Precision.
+mixed_precision: "bf16"          # "bf16" | "fp16" | "fp32"
+gradient_checkpointing: true
+activation_checkpoint_every_n_layers: 2
+
+# Distributed.
+distributed:
+  backend: "fsdp"                # "fsdp" | "deepspeed" | "none"
+  fsdp:
+    sharding_strategy: "FULL_SHARD"
+    cpu_offload: false
+    use_orig_params: true
+  deepspeed:
+    zero_stage: 3
+    offload_optimizer: false
+    offload_param: false
+
+# Data.
+data:
+  mix:
+    - { name: "fineweb_edu",      weight: 0.55 }
+    - { name: "the_stack_v2",     weight: 0.20 }
+    - { name: "wikipedia",        weight: 0.05 }
+    - { name: "books",            weight: 0.05 }
+    - { name: "arxiv",            weight: 0.05 }
+    - { name: "laion_recaptioned", weight: 0.10 }   # only used when vision.enabled
+  pack_sequences: true
+  shuffle_buffer: 100000
+  num_workers: 4
+
+seed: 42
+output_dir: "outputs/pretrain"
+checkpoint_name: "step"
+resume: true

@@ -1,0 +1,77 @@
+# --------------------------------------------------------------------------
+# Long-context extension (a.k.a. "mid-training").
+#
+# Starts from a short-context pretrained checkpoint and:
+#   1) Raises RoPE base / applies YaRN scaling so the model can attend over
+#      the full target window (256K for Aurora, 1M for Forge).
+#   2) Trains on a curated mix of long documents and packed-repository data.
+#
+# This stage produces the headline context numbers. Without it, evaluating
+# the model at 256K / 1M would yield garbage; with it, the model actually
+# uses the extended window.
+# --------------------------------------------------------------------------
+
+stage: "long_context"
+
+# Target context this run extends to. The actual value used can be lower
+# than the model's max_position_embeddings — extension is done in steps
+# (e.g., 8K → 32K → 128K → 256K) by chaining runs of this config.
+sequence_length: 32768
+
+# Long-context training data. Long-form web, books, math papers, and
+# repo-level code. For Forge specifically, repo-level packing dominates.
+data:
+  mix:
+    - { name: "long_books",                weight: 0.30 }
+    - { name: "arxiv_long",                weight: 0.20 }
+    - { name: "github_repo_packed",        weight: 0.40 }   # Forge-heavy
+    - { name: "wikipedia_long_articles",   weight: 0.10 }
+  pack_sequences: true
+  shuffle_buffer: 50000
+  num_workers: 2
+
+# Lower LR to avoid destroying short-context capabilities.
+optimizer:
+  name: "adamw"
+  lr: 5.0e-5
+  weight_decay: 0.1
+  betas: [0.9, 0.95]
+  eps: 1.0e-8
+
+scheduler:
+  name: "cosine_with_warmup"
+  warmup_steps: 200
+  min_lr: 1.0e-5
+
+micro_batch_size: 1
+global_batch_size: 128
+max_steps: 20000
+eval_every: 500
+save_every: 2000
+log_every: 25
+
+grad_clip: 1.0
+mixed_precision: "bf16"
+gradient_checkpointing: true
+activation_checkpoint_every_n_layers: 1   # heavier checkpointing for long context
+
+# RoPE override applied at load time. The script reads these and patches the
+# model's RoPE before training resumes from the prior stage checkpoint.
+rope_overrides:
+  base: null              # null → keep model's configured base
+  scaling:
+    type: "yarn"
+    factor: 4.0           # multiplies the prior context by this factor
+    original_max_position_embeddings: 8192
+
+distributed:
+  backend: "fsdp"
+  fsdp:
+    sharding_strategy: "FULL_SHARD"
+    cpu_offload: false
+    use_orig_params: true
+
+seed: 42
+output_dir: "outputs/long_context"
+checkpoint_name: "step"
+resume_from: "outputs/pretrain/latest"

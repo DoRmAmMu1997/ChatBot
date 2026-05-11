@@ -1,0 +1,17 @@
+name: filesystem_mcp_example
+version: 0.1.0
+description: Example plugin demonstrating tools, hooks, and slash commands.
+tools:
+  - module: tools.py
+    name: word_count
+    schema:
+      type: object
+      properties:
+        path:
+          type: string
+      required: [path]
+hooks:
+  pre_tool: hooks.py::log_call
+slash_commands:
+  - command: /wd
+    handler: handlers.py::current_dir

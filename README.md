@@ -1,164 +1,285 @@
-# ChatBot
+# Chatbot — Aurora-50B & Forge-250B
 
-ChatBot is an educational LLM project built with PyTorch. The repository now
-contains two related paths:
+Two from-scratch PyTorch large language models with a Claude-Code-style
+plugin runtime. The whole thing is meant to be **readable** — every block
+has beginner-friendly comments, every config knob is documented, and the
+training pipeline runs end-to-end on a laptop at the "tiny" tier before
+you commit to renting GPUs.
 
-- a tiny local model path for learning, tests, and CPU smoke runs
-- an original untrained `ChatBot-10B` architecture for real large-scale training
+| Model        | Size                          | Specialization                                   | Context |
+|--------------|-------------------------------|--------------------------------------------------|---------|
+| **Aurora-50B** | 50 B dense, multimodal       | Text + images (Sonnet-class general assistant)   | 256K     |
+| **Forge-250B** | 250 B MoE (~25 B active)     | Coding & software engineering (Opus-class)       | 1M       |
+| **Tiny (~50M)** | Same architecture, miniature | Smoke-testing & education                        | 4K       |
 
-The 10B model is not a fine-tune of Qwen, Gemma, DeepSeek, gpt-oss, or any other
-external model. Those projects are used only as architectural inspiration for
-modern decoder design choices such as RoPE, RMSNorm, SwiGLU, grouped-query
-attention, KV caching, tied embeddings, and bf16-friendly training.
+## What ships in this repo
 
-## What changed
+* **Original architectures** for both models. Every block (RMSNorm, RoPE
+  + YaRN, GQA, MLA, SwiGLU, fine-grained MoE with auxiliary-loss-free
+  load balancing, SigLIP-style vision tower, MLP connector) is implemented
+  with `torch.nn` primitives. No `transformers` model imports.
+* **Tokenizers**: byte-level BPE, trained from text via `scripts/train_tokenizer.py`.
+* **Training pipelines**: pretraining, long-context extension, SFT, DPO,
+  tool-use SFT, and LoRA/QLoRA fine-tuning. FSDP2 and DeepSpeed-ZeRO-3 supported.
+* **Inference**: KV-cache sampler (temperature / top-p / top-k / min-p /
+  repetition penalty), multimodal chat for Aurora, minimal OpenAI-compatible HTTP server.
+* **Claude-Code-style runtime** for Forge: agent loop, built-in tools
+  (filesystem, shell, http, notebook), MCP-protocol client, plugin
+  manifests, markdown skills, lifecycle hooks, slash commands, sub-agents.
+* **Benchmark runners**: HumanEval, MBPP, LiveCodeBench, MMLU, GSM8K,
+  SWE-bench Lite.
+* **No trained checkpoints**. The repo is functional code; training is
+  the user's responsibility, with full instructions in `docs/training-guide.md`.
 
-- Added an original dense `ChatBot-10B` config at about `9.999B` parameters.
-- Replaced the previous simple Transformer internals with modular decoder
-  blocks: RMSNorm, RoPE, grouped-query attention, SwiGLU, and tied LM head.
-- Added BPE tokenizer training through Hugging Face `tokenizers`.
-- Added validation perplexity, top-p sampling, greedy decoding, beam search, and
-  repetition penalty controls.
-- Added dataset recipes for Cornell, DailyDialog, UltraChat, OpenAssistant
-  OASST1, and Dolly 15k.
-- Added tests and GitHub Actions CI for the tiny model path and parameter-count
-  checks.
+## Quick links
 
-## Repository structure
+* [`docs/architecture-aurora-50b.md`](docs/architecture-aurora-50b.md)
+* [`docs/architecture-forge-250b.md`](docs/architecture-forge-250b.md)
+* [`docs/training-guide.md`](docs/training-guide.md) — end-to-end how-to-train
+* [`docs/plugin-system.md`](docs/plugin-system.md) — Claude-Code-style runtime reference
+* [`docs/datasets.md`](docs/datasets.md) — every dataset, license, fetch instructions
+* [`docs/benchmarks.md`](docs/benchmarks.md) — how to run each eval
+* [`docs/beginner-glossary.md`](docs/beginner-glossary.md) — RoPE, MoE, MLA, LoRA, … in plain English
 
-```text
-.
-|-- chatbot.py
-|-- chat_llm.py
-|-- train_llm.py
-|-- train_tokenizer.py
-|-- train_10b.py
-|-- configs/
-|   |-- chatbot-10b.yaml
-|   `-- chatbot-tiny.yaml
-|-- scripts/
-|   `-- estimate_params.py
-|-- data/
-|   |-- dataset_manifest.json
-|   `-- cornell movie-dialogs corpus/
-|-- tests/
-|   |-- fixtures/
-|   `-- test_*.py
-`-- src/
-    `-- chatbot/
-        |-- chat.py
-        |-- config.py
-        |-- data.py
-        |-- model.py
-        |-- tokenizer.py
-        |-- tokenizer_train.py
-        |-- train.py
-        `-- train_10b.py
+## Repository layout
+
+```
+chatbot/
+├── README.md
+├── LICENSE                          # Apache-2.0
+├── pyproject.toml
+├── requirements.txt
+├── requirements-train.txt
+├── configs/
+│   ├── models/                      # tiny, aurora-50b, forge-250b
+│   ├── training/                    # pretrain, long_context, sft, dpo, lora, tool-use-sft
+│   └── runtime/                     # default, aurora-chat, forge-coder
+├── docs/                            # all the architecture / training / plugin docs
+├── plugins_examples/                # two ready-to-copy plugins
+├── scripts/                         # CLI entrypoints
+├── src/chatbot/                     # the Python package itself
+│   ├── models/{common, vision, aurora_50b, forge_250b}
+│   ├── tokenizer/
+│   ├── data/
+│   ├── training/
+│   ├── inference/
+│   ├── runtime/
+│   ├── eval/
+│   └── utils/
+├── tests/
+└── legacy/v0-tiny-chatbot/          # the original ~1M-param educational chatbot, preserved
 ```
 
-## Model notes
-
-`configs/chatbot-10b.yaml` defines the original 10B blueprint:
-
-```text
-vocab_size: 128000
-n_layer: 36
-n_embd: 5120
-n_head: 40
-n_kv_head: 8
-ffn_hidden_size: 12800
-block_size: 4096
-```
-
-With tied input/output embeddings, this reports about `9.999B` parameters:
+## Installation
 
 ```powershell
-python scripts/estimate_params.py --config configs/chatbot-10b.yaml
+# Windows / PowerShell
+git clone https://github.com/<you>/chatbot.git
+cd chatbot
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -e .
+# For training:
+pip install -r requirements-train.txt
 ```
 
-Do not commit 10B checkpoints, random initialized weights, adapters, tokenizer
-outputs, or training runs. They are intentionally ignored by `.gitignore`.
+```bash
+# Linux / macOS
+git clone https://github.com/<you>/chatbot.git
+cd chatbot
+python -m venv .venv
+source .venv/bin/activate
+pip install -e .
+pip install -r requirements-train.txt   # for training
+```
 
-## Setup
+Verify the package imports and the tests pass:
 
 ```powershell
-pip install -r requirements.txt
+python -c "import chatbot; print(chatbot.__version__)"
+pytest tests/ -q
 ```
 
-For full 10B training, use a Linux multi-GPU environment with recent PyTorch,
-bf16-capable GPUs, and a distributed training launcher such as FSDP or DeepSpeed.
-This repository provides the model and data pipeline, but ordinary laptops are
-not expected to train the 10B config.
-
-## Tiny local training
-
-Use the tiny config to verify the code path on CPU:
+Check that the model configs really hit ~50B / ~250B before you commit to
+serious compute:
 
 ```powershell
-python train_llm.py --dataset cornell --max-pairs 64 --steps 5 --batch-size 4 --config configs/chatbot-tiny.yaml --cpu
+python scripts/count_params.py --model tiny
+python scripts/count_params.py --model aurora-50b
+python scripts/count_params.py --model forge-250b
 ```
 
-The checkpoint stores model config, tokenizer metadata, train args, metrics, and
-model weights.
+## Quick smoke test (no GPU required)
 
-## BPE tokenizer
-
-Train a BPE tokenizer from the configured data mix:
+A four-command flow that exercises tokenizer training, pretraining, SFT,
+and chat — all on the tiny config, on CPU, in minutes:
 
 ```powershell
-python train_tokenizer.py --dataset mixed --max-pairs 50000 --vocab-size 128000 --output tokenizers/chatbot-bpe.json
+# 1) Tokenizer.
+python scripts/train_tokenizer.py `
+    --files tests/conftest.py `
+    --vocab-size 1024 `
+    --output checkpoints/tiny-tok.json
+
+# 2) Pretrain a few steps. (Loss should decrease on a fixed seed.)
+python scripts/pretrain.py `
+    --model tiny `
+    --tokenizer checkpoints/tiny-tok.json `
+    max_steps=10 micro_batch_size=2
+
+# 3) SFT a few more steps.
+python scripts/sft.py `
+    --model tiny `
+    --tokenizer checkpoints/tiny-tok.json `
+    --resume-from outputs/pretrain/latest `
+    max_steps=10 micro_batch_size=2
+
+# 4) Chat with the tiny checkpoint.
+python scripts/chat.py `
+    --model tiny `
+    --checkpoint outputs/sft/latest `
+    --tokenizer checkpoints/tiny-tok.json
 ```
 
-For tiny experiments, lower `--vocab-size` and `--max-pairs`.
+If those four commands succeed end-to-end, the bigger configs will run
+end-to-end on a cluster — same code, just bigger numbers in YAML.
 
-## ChatBot-10B training
+## Training the real models
 
-After creating a BPE tokenizer, launch training with the 10B config:
+Every stage is one script invocation. See
+[`docs/training-guide.md`](docs/training-guide.md) for full
+hyperparameter tables, hardware sizing, and the long-context extension
+recipe. Headline commands:
+
+```bash
+# Aurora-50B
+torchrun --nproc-per-node=8 scripts/pretrain.py \
+    --model aurora-50b --training pretrain \
+    --tokenizer checkpoints/aurora-tokenizer.json
+
+torchrun --nproc-per-node=8 scripts/pretrain.py \
+    --model aurora-50b --training long_context \
+    --tokenizer checkpoints/aurora-tokenizer.json \
+    resume_from=outputs/pretrain/latest
+
+torchrun --nproc-per-node=8 scripts/sft.py    --model aurora-50b --tokenizer ...
+torchrun --nproc-per-node=8 scripts/dpo.py    --model aurora-50b --tokenizer ...
+```
+
+Forge adds one extra stage (tool-use SFT) at the end. Compute budgets
+are very real:
+
+| Model        | Pretrain (full)    | SFT (full)      | LoRA   | QLoRA                |
+|--------------|--------------------|-----------------|--------|----------------------|
+| Tiny (~50M)  | 1 GPU              | 1 GPU           | 1 GPU  | 1 GPU                |
+| Aurora-50B   | 256–1024× H100     | 32–64× H100     | 8× H100| 2–4× A100 / RTX 6000 |
+| Forge-250B   | 1024–4096× H100    | 64–128× H100    | 16× H100 | 4–8× H100 (NF4)   |
+
+LoRA / QLoRA paths (in `scripts/lora_finetune.py`) make continuation
+training realistic on consumer hardware.
+
+## Chatting with a trained model
 
 ```powershell
-python train_10b.py --config configs/chatbot-10b.yaml --tokenizer bpe --tokenizer-path tokenizers/chatbot-bpe.json --dataset mixed
+python scripts/chat.py `
+    --model aurora-50b `
+    --checkpoint outputs/dpo/latest `
+    --tokenizer checkpoints/aurora-tokenizer.json `
+    --runtime aurora-chat
 ```
 
-For real training, run the same entrypoint through your distributed launcher and
-set batch size, gradient accumulation, precision, checkpointing, and output
-locations for the target cluster. The full datasets are downloaded during
-training; they are not stored in this repository.
-
-## Dataset notes
-
-The repo keeps Cornell Movie Dialogues bundled for offline experiments. The
-other recipes are downloaded through Hugging Face `datasets` when requested:
-
-- `OpenRL/daily_dialog`
-- `HuggingFaceH4/ultrachat_200k`
-- `OpenAssistant/oasst1`
-- `databricks/databricks-dolly-15k`
-
-Always review each dataset license and terms before training or publishing
-weights. The test suite uses tiny synthetic fixtures, not full external data.
-
-## Chatting
-
-After training a checkpoint:
+The runtime config (`configs/runtime/aurora-chat.yaml`) controls system
+prompt, temperature, top-p, top-k, min-p, repetition penalty, stop
+sequences, max-new-tokens, and context window. Override any leaf from
+the CLI:
 
 ```powershell
-python chatbot.py --checkpoint checkpoints/chatbot-small-llm.pt --temperature 0.8 --top-p 0.9
+python scripts/chat.py ... runtime.temperature=0.3
 ```
 
-Useful inference controls:
-
-- `--greedy`: always choose the highest-scoring token
-- `--top-k`: keep only the top k tokens before sampling
-- `--top-p`: nucleus sampling threshold
-- `--num-beams`: beam search width
-- `--repetition-penalty`: reduce repeated tokens
-
-## Tests
+## Agent mode (Forge)
 
 ```powershell
-python -m compileall chatbot.py chat_llm.py train_llm.py train_tokenizer.py train_10b.py src scripts
-pytest
-python scripts/estimate_params.py --config configs/chatbot-10b.yaml
+python scripts/agent.py `
+    --model forge-250b `
+    --checkpoint outputs/tool_use_sft/latest `
+    --tokenizer checkpoints/forge-tokenizer.json `
+    --runtime forge-coder
 ```
 
-CI runs these checks on Python 3.11 and verifies the tiny CPU training path.
+This launches the Claude-Code-style loop: the model can read the
+filesystem, run shell commands (subject to allowlist), make HTTP
+requests, execute Python notebook cells, and call any plugin or MCP
+server discovered under `~/.chatbot/plugins/`.
+
+Plugin authoring guide: [`docs/plugin-system.md`](docs/plugin-system.md).
+Working examples: [`plugins_examples/`](plugins_examples/).
+
+## Evaluation
+
+```powershell
+python scripts/eval.py `
+    --bench humaneval `
+    --model forge-250b `
+    --checkpoint outputs/dpo/latest `
+    --tokenizer checkpoints/forge-tokenizer.json `
+    --limit 164
+```
+
+See [`docs/benchmarks.md`](docs/benchmarks.md) for the full benchmark
+list and instructions for SWE-bench Lite (which needs a Docker-backed
+sandbox per problem — we ship the patch-extraction half; you supply the
+runner).
+
+## Inspirations
+
+Architectures are original, but the design ideas are openly inspired by:
+
+* Llama 3.1 / 3.2-Vision, Gemma 3, Mistral — dense + SwiGLU + GQA + RoPE.
+* SigLIP / SigLIP2 — vision encoder pattern.
+* DeepSeek-V3 — fine-grained MoE, shared experts, AL-free balancing, MLA.
+* Qwen3-Coder — long-context, repo-level packed training.
+* Claude Code — plugin / skill / hook / slash-command / MCP runtime layer.
+
+The code in this repository is our own. We use PyTorch (framework),
+`tokenizers` (BPE library), `datasets` (data loading), and
+`bitsandbytes` (quantization), but the model architectures themselves are
+implemented from scratch.
+
+## License
+
+Apache-2.0, see [LICENSE](LICENSE). The model code is licensed as the
+project's own work; *trained weights* (if you produce any) are governed by
+the licenses of the datasets you trained on — see
+[`docs/datasets.md`](docs/datasets.md) for license metadata on every
+dataset entry in the registry.
+
+## FAQ
+
+**Q: Do you ship checkpoints?**
+No. The repo is functional code. Training the real 50B / 250B models is
+a compute commitment we don't make on your behalf — but you can do it
+yourself with the scripts here, with the exact recipes documented in
+[`docs/training-guide.md`](docs/training-guide.md).
+
+**Q: Can I run the 50B / 250B models on a single GPU?**
+For full inference: no. The KV cache alone at full context is tens of
+gigabytes. For *fine-tuning*: yes, via QLoRA on the right hardware (see
+the table above). For learning / experimentation: use the `tiny` config.
+
+**Q: Why not `transformers`?**
+We deliberately implement architectures from scratch so the code is
+readable end-to-end. `transformers` is great for production, but it
+hides the moving parts that this repo is designed to teach.
+
+**Q: Do these models actually beat Claude / GPT?**
+The repo is the model code, not the result of training it. We're not
+claiming the resulting checkpoints will match production models — those
+took thousands of GPU-years. We are claiming the architectures and
+recipes are sound and faithfully reproduce the ideas behind those models.
+
+## Help and contributing
+
+Open an issue if anything is unclear; PRs welcome. The codebase is
+deliberately small (about 5K lines of model / runtime code) so it's easy
+to read and modify.

@@ -1,0 +1,28 @@
+# --------------------------------------------------------------------------
+# Aurora-50B chat runtime defaults.
+#
+# Inherits structure from configs/runtime/default.yaml; this file holds only
+# the values that should differ for Aurora. The config loader merges them.
+# --------------------------------------------------------------------------
+
+defaults:
+  - default                       # see configs/runtime/default.yaml
+
+system_prompt: |
+  You are Aurora, a careful and thoughtful multimodal assistant. You can read
+  both text and images. When given an image, describe what you see clearly
+  before answering. If you are unsure, say so.
+
+temperature: 0.7
+top_p: 0.95
+max_new_tokens: 8192
+context_window: 262144
+
+# Aurora is a chat model first; tools are off by default.
+tools_enabled: false
+
+# Vision specifics.
+vision:
+  default_image_size: 384
+  preserve_aspect_ratio: true
+  max_images_per_prompt: 12

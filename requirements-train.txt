@@ -1,0 +1,15 @@
+# Heavy training-only dependencies. Install on top of requirements.txt:
+#     pip install -r requirements.txt
+#     pip install -r requirements-train.txt
+#
+# Pinned loosely so users can pick versions that match their CUDA toolkit.
+# Flash-attention does not build cleanly on Windows; we skip it there and fall
+# back to PyTorch's built-in scaled_dot_product_attention.
+
+deepspeed>=0.14
+bitsandbytes>=0.43
+accelerate>=0.30
+flash-attn>=2.5 ; platform_system != "Windows"
+wandb>=0.17
+tensorboard>=2.16
+scipy>=1.11

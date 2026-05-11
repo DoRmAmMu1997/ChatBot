@@ -1,0 +1,60 @@
+# --------------------------------------------------------------------------
+# Aurora-50B — dense multimodal Sonnet-class model.
+#
+# Parameter budget (verified by scripts/count_params.py):
+#   - Embeddings + LM head:                       ~ 1.9 B
+#   - 64 layers * (~210M attn + ~528M SwiGLU FFN):  ~47   B
+#   - Vision tower (SigLIP-So400M-style):          ~0.4  B
+#   - MLP connector:                                ~0.05 B
+#   - Total                                         ~49–50 B
+#
+# Native context: 256K tokens (Sonnet-class). The pretraining stage uses
+# 8K-32K; the long-context extension stage raises RoPE base and YaRN-scales
+# up to the headline 256K, then fine-tunes on long packed documents.
+# --------------------------------------------------------------------------
+
+family: aurora
+
+# Language backbone.
+d_model: 7168
+n_layers: 64
+n_heads: 56
+n_kv_heads: 8           # GQA: 7 queries share each KV head
+head_dim: 128
+ffn_hidden: 24576       # SwiGLU intermediate (~3.4x d_model)
+vocab_size: 131072      # 128K BPE
+max_position_embeddings: 262144  # 256K — set on top of training context via YaRN
+
+# Normalization + position encoding.
+rms_norm_eps: 1.0e-5
+rope_base: 2000000.0    # tuned for 256K (Llama-3.1 used 500K for 128K; we scale up)
+rope_scaling:
+  type: "yarn"
+  factor: 8.0           # extends an 8K-trained context up to 64K cleanly;
+                        # full 256K reached after long-context mid-training stage
+  original_max_position_embeddings: 32768
+
+ffn:
+  type: "swiglu"
+  hidden: 24576
+
+moe:
+  enabled: false        # Aurora is dense
+
+vision:
+  enabled: true
+  image_size: 384
+  patch_size: 14
+  vision_dim: 1152      # SigLIP-So400M-style width
+  vision_layers: 27
+  vision_heads: 16
+  connector_hidden: 7168
+  num_image_tokens: 729 # 27x27 patch grid at 384 px
+
+dropout: 0.0
+init_std: 0.02
+tie_embeddings: false   # large model — separate LM head is fine
+
+pad_token_id: 0
+bos_token_id: 1
+eos_token_id: 2

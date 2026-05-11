@@ -1,0 +1,56 @@
+# --------------------------------------------------------------------------
+# Supervised Fine-Tuning (SFT).
+#
+# Teaches the model to follow instructions. Loss is computed only on the
+# assistant turns — user turns are masked out so the model isn't penalised
+# for re-emitting questions.
+# --------------------------------------------------------------------------
+
+stage: "sft"
+
+sequence_length: 8192
+
+data:
+  mix:
+    - { name: "tulu3_sft",            weight: 0.40 }
+    - { name: "openorca",             weight: 0.20 }
+    - { name: "magicoder_evol",       weight: 0.20 }     # Forge-heavy
+    - { name: "llava_next_instruct",  weight: 0.10 }     # Aurora-heavy
+    - { name: "openmathinstruct2",    weight: 0.10 }
+  shuffle_buffer: 50000
+  num_workers: 4
+  mask_user_turns: true
+
+optimizer:
+  name: "adamw"
+  lr: 5.0e-6
+  weight_decay: 0.0
+  betas: [0.9, 0.95]
+  eps: 1.0e-8
+
+scheduler:
+  name: "cosine_with_warmup"
+  warmup_steps: 100
+  min_lr: 1.0e-6
+
+micro_batch_size: 4
+global_batch_size: 256
+max_steps: 5000
+eval_every: 200
+save_every: 1000
+log_every: 25
+
+grad_clip: 1.0
+mixed_precision: "bf16"
+gradient_checkpointing: true
+
+distributed:
+  backend: "fsdp"
+  fsdp:
+    sharding_strategy: "FULL_SHARD"
+    cpu_offload: false
+    use_orig_params: true
+
+seed: 42
+output_dir: "outputs/sft"
+resume_from: "outputs/long_context/latest"

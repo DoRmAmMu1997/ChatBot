@@ -1,0 +1,87 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chatbot"
+version = "1.0.0"
+description = "Aurora-50B (multimodal) and Forge-250B (MoE coder) — two original PyTorch LLMs with a Claude-Code-style plugin runtime."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [
+    { name = "Chatbot Contributors" },
+]
+keywords = ["llm", "transformer", "moe", "multimodal", "agent", "plugins"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+]
+
+dependencies = [
+    "torch>=2.4",
+    "numpy>=1.24",
+    "pyyaml>=6.0",
+    "omegaconf>=2.3",
+    "pydantic>=2.5",
+    "tokenizers>=0.20",
+    "sentencepiece>=0.2",
+    "jinja2>=3.1",
+    "tqdm>=4.66",
+    "regex>=2024.5",
+    "pillow>=10.0",
+    "datasets>=2.18",
+    "safetensors>=0.4",
+]
+
+[project.optional-dependencies]
+train = [
+    # Heavy training-only dependencies. Pinned loosely so users can pick versions
+    # that match their CUDA. Install with: pip install -e ".[train]"
+    "deepspeed>=0.14",
+    "bitsandbytes>=0.43",
+    "accelerate>=0.30",
+    "flash-attn>=2.5 ; platform_system != 'Windows'",
+    "wandb>=0.17",
+    "tensorboard>=2.16",
+    "scipy>=1.11",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.4",
+    "mypy>=1.10",
+]
+eval = [
+    "human-eval>=1.0 ; platform_system != 'Windows'",
+    "evaluate>=0.4",
+]
+
+[project.scripts]
+chatbot-chat = "chatbot.inference.generate:cli"
+chatbot-agent = "chatbot.runtime.agent:cli"
+
+[project.urls]
+Repository = "https://github.com/YOUR_HANDLE/chatbot"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"

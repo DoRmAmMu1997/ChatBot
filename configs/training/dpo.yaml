@@ -1,0 +1,63 @@
+# --------------------------------------------------------------------------
+# Direct Preference Optimization (DPO).
+#
+# Trains the policy model on (chosen, rejected) response pairs to make
+# preferred outputs more likely than dispreferred ones. Cheaper and more
+# stable than RLHF (no separate reward model or PPO).
+# --------------------------------------------------------------------------
+
+stage: "dpo"
+
+sequence_length: 8192
+
+# DPO-specific hyperparameters.
+dpo:
+  beta: 0.1                         # KL strength — smaller = closer to reference
+  label_smoothing: 0.0
+  loss_type: "sigmoid"              # "sigmoid" | "ipo" | "kto"
+  reference_free: false
+  # The reference model is a frozen copy of the SFT checkpoint. We hold it on
+  # CPU and stream parameters as needed to save VRAM during training.
+  reference_offload_to_cpu: true
+
+data:
+  mix:
+    - { name: "ultrafeedback",         weight: 0.50 }
+    - { name: "hh_rlhf",               weight: 0.20 }
+    - { name: "code_preference_pairs", weight: 0.30 }
+  shuffle_buffer: 30000
+  num_workers: 2
+
+optimizer:
+  name: "adamw"
+  lr: 1.0e-6
+  weight_decay: 0.0
+  betas: [0.9, 0.95]
+  eps: 1.0e-8
+
+scheduler:
+  name: "cosine_with_warmup"
+  warmup_steps: 50
+  min_lr: 1.0e-7
+
+micro_batch_size: 2
+global_batch_size: 128
+max_steps: 2000
+eval_every: 100
+save_every: 500
+log_every: 25
+
+grad_clip: 1.0
+mixed_precision: "bf16"
+gradient_checkpointing: true
+
+distributed:
+  backend: "fsdp"
+  fsdp:
+    sharding_strategy: "FULL_SHARD"
+    cpu_offload: false
+    use_orig_params: true
+
+seed: 42
+output_dir: "outputs/dpo"
+resume_from: "outputs/sft/latest"

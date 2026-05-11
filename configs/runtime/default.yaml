@@ -1,0 +1,66 @@
+# --------------------------------------------------------------------------
+# Default runtime config.
+#
+# Every knob that affects how the model behaves at inference time lives here.
+# Override any leaf from the CLI (e.g. --runtime.temperature=0.5).
+# --------------------------------------------------------------------------
+
+# What the model sees as the system prompt at the start of every chat.
+system_prompt: |
+  You are a helpful, harmless, and honest assistant. Respond in clear,
+  natural language. When you don't know something, say so plainly.
+
+# Sampling parameters.
+temperature: 0.7
+top_p: 0.95
+top_k: 0                # 0 disables top-k (top-p alone)
+min_p: 0.0
+repetition_penalty: 1.0
+presence_penalty: 0.0
+frequency_penalty: 0.0
+
+# Generation limits.
+max_new_tokens: 4096
+stop_sequences: []      # e.g. ["</tool_call>", "<|user|>"]
+
+# Active context window. Must be <= the model's max_position_embeddings.
+# Aurora-50B default = 262144 (256K); Forge-250B default = 1048576 (1M).
+context_window: 262144
+
+# Streaming.
+stream: true
+
+# Tool calling. When enabled, the runtime parses <tool_call>…</tool_call>
+# blocks from the model output and dispatches them through the plugin layer.
+tools_enabled: false
+tool_call_format: "json"        # "json" | "xml"
+tool_max_iterations: 24         # safety cap on tool-call loops
+tool_timeout_seconds: 60
+
+# Plugin discovery. Directories scanned at startup for plugin.yaml manifests.
+plugins_dir: "~/.chatbot/plugins"
+extra_plugin_paths: []
+enabled_plugins: []
+disabled_plugins: []
+
+# Skills. Markdown files loaded the same way Claude Code loads skills.
+skills_enabled: true
+skills_auto_select: true        # auto-prefix matching skills into the prompt
+skills_max_active: 4
+
+# Hooks. Lifecycle callbacks registered by plugins.
+hooks_enabled: true
+
+# Slash commands. Resolved before being sent to the model.
+slash_commands_enabled: true
+
+# Subagents.
+subagents_enabled: true
+subagent_max_concurrency: 4
+
+# Safety.
+safety:
+  content_filter: false          # placeholder for future moderation hook
+  shell_allowlist: []            # restrict shell tool commands
+  filesystem_allowlist: []       # restrict filesystem tool paths
+  network_allowlist: []          # restrict http tool hosts

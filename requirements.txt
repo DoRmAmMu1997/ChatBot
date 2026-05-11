@@ -1,7 +1,17 @@
-torch>=2.1
-tokenizers>=0.15
-PyYAML>=6.0
-pytest>=8.0
+# Core runtime dependencies for using the models.
+# For training-only extras (DeepSpeed, bitsandbytes, flash-attn, etc.)
+# install requirements-train.txt or use: pip install -e ".[train]"
 
-# Optional: needed when using Hugging Face dataset recipes.
+torch>=2.4
+numpy>=1.24
+pyyaml>=6.0
+omegaconf>=2.3
+pydantic>=2.5
+tokenizers>=0.20
+sentencepiece>=0.2
+jinja2>=3.1
+tqdm>=4.66
+regex>=2024.5
+pillow>=10.0
 datasets>=2.18
+safetensors>=0.4

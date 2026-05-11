@@ -1,25 +1,18 @@
-"""Small LLM chatbot package."""
+"""Chatbot — two original PyTorch LLMs (Aurora-50B + Forge-250B) plus runtime.
 
-from .config import ModelConfig, chatbot_10b_config, tiny_config
-from .params import estimate_parameter_count
-from .tokenizer import BPETokenizer, SimpleTokenizer
+This is the top-level package. Sub-packages:
 
-__all__ = [
-    "BPETokenizer",
-    "ModelConfig",
-    "SimpleTokenizer",
-    "TransformerChatModel",
-    "chatbot_10b_config",
-    "estimate_parameter_count",
-    "tiny_config",
-]
+* ``chatbot.models``     — model code (Aurora-50B, Forge-250B, shared blocks).
+* ``chatbot.tokenizer``  — BPE tokenizer + chat / tool templates.
+* ``chatbot.data``       — pretrain / SFT / DPO / tool-use data loaders.
+* ``chatbot.training``   — pretrain, SFT, DPO, LoRA training pipelines.
+* ``chatbot.inference``  — generation, multimodal chat, OpenAI-style HTTP server.
+* ``chatbot.runtime``    — Claude-Code-style plugin / skill / hook layer.
+* ``chatbot.eval``       — HumanEval, MBPP, SWE-bench, MMLU, GSM8K runners.
+* ``chatbot.utils``      — config loader, logging, seeding, memory accounting.
 
+Nothing here imports torch at the top level; sub-packages do, so importing
+``chatbot`` itself is cheap.
+"""
 
-def __getattr__(name):
-    """Load PyTorch model objects only when they are requested."""
-
-    if name == "TransformerChatModel":
-        from .model import TransformerChatModel
-
-        return TransformerChatModel
-    raise AttributeError(name)
+__version__ = "1.0.0"

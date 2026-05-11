@@ -1,0 +1,69 @@
+# --------------------------------------------------------------------------
+# Forge-250B coder runtime defaults.
+#
+# This is where the Claude-Code-style plugin/skill/hook layer is turned on.
+# Tools are enabled, the default toolset is the built-in filesystem + shell
+# + http + notebook, and a 1M-token context window is the default.
+# --------------------------------------------------------------------------
+
+defaults:
+  - default
+
+system_prompt: |
+  You are Forge, a senior software engineer assistant. You write clear,
+  correct, well-tested code. You explain trade-offs concisely. When working
+  in a repository, you read before writing, prefer surgical edits, and never
+  leave the codebase in a broken state. Use tools whenever they would let
+  you verify something instead of guessing.
+
+# Coding tasks reward lower temperature.
+temperature: 0.3
+top_p: 0.95
+max_new_tokens: 16384
+context_window: 1048576
+
+# Tool calling — the whole point of Forge.
+tools_enabled: true
+tool_call_format: "json"
+tool_max_iterations: 64
+tool_timeout_seconds: 120
+
+# Plugins enabled by default. The runtime ships built-in implementations
+# of these; users can add more via ~/.chatbot/plugins/ or extra_plugin_paths.
+enabled_plugins:
+  - "builtin.filesystem"
+  - "builtin.shell"
+  - "builtin.http"
+  - "builtin.notebook"
+
+skills_enabled: true
+skills_auto_select: true
+skills_max_active: 6
+
+hooks_enabled: true
+slash_commands_enabled: true
+subagents_enabled: true
+subagent_max_concurrency: 6
+
+safety:
+  content_filter: false
+  # Sensible defaults: allow shell tools but with a small allowlist;
+  # users can broaden via override.
+  shell_allowlist:
+    - "git"
+    - "python"
+    - "pytest"
+    - "ls"
+    - "cat"
+    - "grep"
+    - "find"
+    - "rg"
+    - "pip"
+  filesystem_allowlist:
+    - "${PWD}"
+    - "${PWD}/**"
+  network_allowlist:
+    - "github.com"
+    - "raw.githubusercontent.com"
+    - "pypi.org"
+    - "huggingface.co"

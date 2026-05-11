@@ -1,0 +1,57 @@
+# --------------------------------------------------------------------------
+# Tool-Use Supervised Fine-Tuning (Forge-250B only).
+#
+# Trains the model to emit well-formed <tool_call>…</tool_call> blocks that
+# match the runtime's expected JSON schema. The training data is a mix of
+# real agent traces (ToolBench, ToolLLM) plus synthetic traces generated
+# from the runtime's built-in tools (filesystem, shell, http, notebook).
+# --------------------------------------------------------------------------
+
+stage: "tool_use_sft"
+
+sequence_length: 16384
+
+data:
+  mix:
+    - { name: "toolbench",          weight: 0.40 }
+    - { name: "toolllm",            weight: 0.20 }
+    - { name: "opencodeinterpreter", weight: 0.20 }
+    - { name: "synthetic_agent_traces", weight: 0.20 }
+  shuffle_buffer: 20000
+  num_workers: 2
+  mask_user_turns: true
+  # Mask tool result content so the loss only attributes the model's
+  # *decision* to call a tool, not the environment's response.
+  mask_tool_results: true
+
+optimizer:
+  name: "adamw"
+  lr: 3.0e-6
+  weight_decay: 0.0
+  betas: [0.9, 0.95]
+  eps: 1.0e-8
+
+scheduler:
+  name: "cosine_with_warmup"
+  warmup_steps: 50
+  min_lr: 1.0e-7
+
+micro_batch_size: 2
+global_batch_size: 64
+max_steps: 1500
+eval_every: 100
+save_every: 250
+log_every: 25
+
+grad_clip: 1.0
+mixed_precision: "bf16"
+gradient_checkpointing: true
+
+distributed:
+  backend: "fsdp"
+  fsdp:
+    sharding_strategy: "FULL_SHARD"
+
+seed: 42
+output_dir: "outputs/tool_use_sft"
+resume_from: "outputs/dpo/latest"
