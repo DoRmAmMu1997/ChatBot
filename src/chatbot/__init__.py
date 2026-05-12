@@ -1,7 +1,7 @@
 """Chatbot — two original PyTorch LLMs (Aurora + Forge) plus runtime.
 
 Aurora (~72B dense omni-modal: text + image + audio in, text + audio out)
-and Forge (~320B / ~31B-active MoE coder + DevOps assistant with vision
+and Forge (~460B / ~35B-active MoE coder + DevOps assistant with vision
 and audio inputs) are the two flagship models. A tiny (~30M) config
 shares the same architecture for smoke tests.
 

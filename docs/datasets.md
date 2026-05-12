@@ -25,7 +25,7 @@ referenced from their YAML mix; nothing is downloaded silently.
 | `ultrafeedback`        | dpo            | MIT            | Binarized preferences. |
 | `hh_rlhf`              | dpo            | MIT            | Anthropic's helpfulness/harmlessness preferences. |
 
-## Forge-320B mix
+## Forge-460B mix
 
 | Dataset                | Stage          | License        | Notes |
 |------------------------|----------------|----------------|-------|

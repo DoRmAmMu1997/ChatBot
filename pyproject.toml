@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "chatbot"
 version = "2.0.0"
-description = "Aurora (omni-modal text + image + audio, ~72B dense) and Forge (MoE coder, ~320B / 31B active, vision + audio + DevOps, RLEF-trained). Two from-scratch PyTorch LLMs with a Claude-Code-style plugin runtime."
+description = "Aurora (omni-modal text + image + audio, ~72B dense) and Forge (MoE coder, ~464B / ~35.5B active, vision + audio + DevOps, RLEF-trained). Two from-scratch PyTorch LLMs with a Claude-Code-style plugin runtime."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }

@@ -1,4 +1,4 @@
-"""Forge (~320B total / ~31B active): MoE coder + DevOps assistant.
+"""Forge (~464B total / ~35.5B active): MoE coder + DevOps assistant.
 
 Multi-head Latent Attention (MLA) lets the 1M-token context fit in
 memory; fine-grained MoE keeps the active per-token cost manageable; a

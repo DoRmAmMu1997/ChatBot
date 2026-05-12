@@ -1,12 +1,12 @@
-# Forge architecture (MoE coder, ~320B total / ~31B active)
+# Forge architecture (MoE coder, ~464B total / ~35.5B active)
 
 A fine-grained Mixture-of-Experts decoder-only Transformer specialized
 for code, software engineering, and DevOps tasks. Pairs DeepSeek-V3-style
 fine-grained MoE with Multi-head Latent Attention (MLA) so a 1M-token
 context is computationally viable. v2 adds vision (code screenshots) +
-audio (voice descriptions). The file is still called
-`architecture-forge-250b.md` for backwards compatibility, but the numbers
-below are the v2 (~320B / ~31B active) shape.
+audio (voice descriptions). The config implies ~464B total parameters and
+~35.5B active per token — squarely in the Opus-class MoE neighbourhood
+(DeepSeek V3 is 671B/37B-active).
 
 ## Big picture
 
@@ -42,15 +42,15 @@ below are the v2 (~320B / ~31B active) shape.
 
 ## Why MoE?
 
-A dense 320B Transformer is wildly expensive per token (every parameter
+A dense 460B Transformer is wildly expensive per token (every parameter
 participates in every step). MoE keeps the same "knowledge" capacity but
 only routes each token through a handful of specialist FFNs. Practical
-shape for Forge v2:
+shape for Forge:
 
 * **160 routed expert FFNs** per MoE layer, each FFN-hidden 2048
-  (was 128 × 1536 in v1).
+  (each expert ≈ `3 × 6656 × 2048 ≈ 40.89 M` params).
 * **8 routed experts active per token + 1 shared expert** always on.
-* **Active params per token ≈ 31 B** (out of ~320 B total).
+* **Active params per token ≈ 35.5 B** (out of ~464 B total).
 
 ## Why MLA?
 

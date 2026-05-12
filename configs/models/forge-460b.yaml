@@ -3,25 +3,25 @@
 #
 # DeepSeek-V3-inspired fine-grained MoE with shared experts and the
 # auxiliary-loss-free load-balancing bias trick. MLA replaces standard
-# attention so the 1M-context KV cache stays manageable (~70 GB instead
+# attention so the 1M-context KV cache stays manageable (~80 GB instead
 # of ~500 GB plain GQA).
 #
-# v2 adds: vision tower (code screenshots), audio encoder (voice
-# descriptions), audio codebook (4096 tokens), and bumped MoE size
-# (160 routed experts × 2048 expert-hidden, was 128 × 1536).
+# Parameter budget (verified by direct math against the configs):
+#   - Embeddings + LM head (204K vocab × 6656 d_model):    ~ 2.72 B
+#   - MLA attention (72 layers × ~80.5M):                  ~ 5.80 B
+#   - 3 dense FFN warm-up layers (SwiGLU 19968):           ~ 1.20 B
+#   - 69 MoE layers × (160 routed + 1 shared + router):    ~ 454.4 B
+#       └ each expert is 3 × 6656 × 2048 ≈ 40.89 M
+#   - Vision tower + connector (224 px SigLIP-lite):       ~ 0.163 B
+#   - Audio encoder (8-layer Conformer-ish):               ~ 0.150 B
+#   - Total                                                ~ 464 B
+#   - Active per token (8 of 160 routed + shared + dense): ~ 35.5 B
 #
-# Parameter budget (verified by scripts/count_params.py):
-#   - Embeddings + LM head:                              ~ 2.7 B
-#   - 72 * MLA attention:                                ~ 9.3 B
-#   - 3 dense FFN warm-up layers:                        ~ 0.8 B
-#   - 69 MoE layers * (160 routed + 1 shared) * ~40M:    ~ 305 B
-#   - Vision tower (small SigLIP-style, 224 px):         ~ 0.25 B
-#   - Audio encoder (8-layer Conformer):                 ~ 0.08 B
-#   - Total                                              ~ 320 B
-#   - Active per token: ~31 B
-#
-# Filename kept as `forge-250b.yaml` for backwards compatibility — the
-# numbers inside are v2 (~320 B total / ~31 B active), not v1.
+# The original README and the previous filename (forge-320b) understated
+# the size — the config implies ~460B, which is still squarely in the
+# Opus-class MoE neighbourhood (DeepSeek V3 is 671B/37B-active). The
+# file is now named ``forge-460b.yaml`` so the headline number matches
+# what the code actually builds.
 # --------------------------------------------------------------------------
 
 family: forge

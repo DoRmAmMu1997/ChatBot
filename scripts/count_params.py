@@ -7,7 +7,7 @@ a 50B config really hits ~50B and a 250B config really hits ~250B total /
 Examples (PowerShell):
     python scripts\\count_params.py --model tiny
     python scripts\\count_params.py --model aurora-72b
-    python scripts\\count_params.py --model forge-320b
+    python scripts\\count_params.py --model forge-460b
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ from chatbot.utils.memory import (                     # noqa: E402
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Count parameters in a model config.")
-    parser.add_argument("--model", required=True, help="Model config name, e.g. tiny / aurora-72b / forge-320b.")
+    parser.add_argument("--model", required=True, help="Model config name, e.g. tiny / aurora-72b / forge-460b.")
     args = parser.parse_args()
 
     model_cfg = load_config(f"models/{args.model}")

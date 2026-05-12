@@ -1,34 +1,41 @@
 # --------------------------------------------------------------------------
 # Aurora — dense omni-modal model (Sonnet-/GPT-4o-class).
 #
-# Parameter budget (verified by scripts/count_params.py):
-#   - LM stack (72 layers, 8192-d, 28672 FFN):       ~70  B
-#   - Embeddings + LM head:                           ~1.1 B
-#   - Vision tower (SigLIP-So400M-style):             ~0.5 B
-#   - MLP connectors (vision + audio):                ~0.1 B
-#   - Audio encoder (12-layer Conformer):             ~0.15 B
+# Parameter budget (verified by scripts/count_params.py and by the raw
+# math in configs/models/_check_params.md):
+#   - LM stack (81 layers × ~856M per layer):         ~69.3 B
+#   - Embeddings + LM head (132K vocab, 8192-d):       ~2.16 B
+#   - Vision tower (SigLIP-So400M-style, 28×28 = 784 patches at 392 px):
+#                                                      ~0.575 B
+#   - Vision connector (1152 → 8192 → 8192 MLP):       ~0.077 B
+#   - Audio encoder (12-layer Conformer-ish, 1024-d):  ~0.219 B
 #   - Audio codec (separate model — loaded at infer): ~0.12 B
-#   - Total                                           ~72 B
+#   - In-model total                                  ~72.3 B
 #
 # Native context: 256K tokens (Sonnet-class). The pretraining stage uses
 # 8K-32K; the long-context extension stage raises RoPE base and YaRN-
 # scales up to the headline 256K, then fine-tunes on long packed
 # documents.
 #
-# Filename kept as `aurora-50b.yaml` for backwards compatibility with
-# existing scripts — the numbers inside are v2 (~72 B), not v1 (50 B).
+# Why image_size = 392, not 384:
+#   PatchEmbed asserts image_size % patch_size == 0 because non-divisible
+#   sizes would leave a partial patch. 384 / 14 ≈ 27.43 (fails). The
+#   nearest multiples of 14 are 378 (27×27) and 392 (28×28). We pick 392
+#   for slightly more spatial resolution — SigLIP-So400M-patch14-384 in
+#   the literature actually crops/pads to 378 internally; we just declare
+#   392 up front so the assert is happy.
 # --------------------------------------------------------------------------
 
 family: aurora
 
 # Language backbone.
 d_model: 8192
-n_layers: 72
+n_layers: 81                       # 72 was too few to hit ~72B; raised to 81 → ~72.3B
 n_heads: 64
 n_kv_heads: 8
 head_dim: 128
 ffn_hidden: 28672
-vocab_size: 132096                # 128K text BPE + 4096 audio + specials
+vocab_size: 132096                 # 128K text BPE + 4096 audio + specials
 max_position_embeddings: 262144
 
 rms_norm_eps: 1.0e-5
@@ -47,13 +54,13 @@ moe:
 
 vision:
   enabled: true
-  image_size: 384
+  image_size: 392                  # = 28 × 14; satisfies PatchEmbed's divisibility assert
   patch_size: 14
   vision_dim: 1152
   vision_layers: 27
   vision_heads: 16
   connector_hidden: 8192
-  num_image_tokens: 729
+  num_image_tokens: 784            # = 28 × 28 patch grid at 392 px
 
 audio:
   enabled: true

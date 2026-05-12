@@ -14,7 +14,7 @@ images ──── │ Vision Tower (ViT-So400M)   │
                          │ patch features
                          ▼
                 ┌─────────────────┐
-                │ MLP Connector   │ → soft image tokens (729/img)
+                │ MLP Connector   │ → soft image tokens (784/img)
                 └────────┬────────┘
                          │
             ┌─────────────────────────────┐
@@ -24,7 +24,7 @@ audio  ──── │ Audio Encoder (Conformer)   │
                          ▼
    token ids ─────────▶ Embedding (vocab 132K, 8192-d)
                          │
-            ┌──── for L in range(72) ────┐
+            ┌──── for L in range(81) ────┐
             │  RMSNorm                   │
             │  GQA (64q / 8kv heads, RoPE)│
             │  ── residual ──            │
@@ -47,7 +47,7 @@ audio  ──── │ Audio Encoder (Conformer)   │
 | Knob | Default | Why |
 |---|---|---|
 | `d_model` | 8192 | Residual-stream width — bumped from 7168 for capacity. |
-| `n_layers` | 72 | Depth — bumped from 64. |
+| `n_layers` | 81 | Depth — chosen so 81 × ~856M per layer + ~2.16B embeddings + ~0.87B vision/audio lands at ~72B. |
 | `n_heads` | 64 | Query heads. With `head_dim=128`, `n_heads * head_dim = d_model`. |
 | `n_kv_heads` | 8 | KV heads (GQA). Each KV head is shared by 8 query heads → 8x KV-cache reduction. |
 | `ffn_hidden` | 28672 | SwiGLU intermediate (~3.5x `d_model`). |
@@ -55,15 +55,15 @@ audio  ──── │ Audio Encoder (Conformer)   │
 | `max_position_embeddings` | 262144 | 256K context — Sonnet-class. Reached via YaRN extension. |
 | `rope_base` | 2,000,000 | High base smoothly extends RoPE to long contexts. |
 | `rope_scaling.factor` | 8.0 | YaRN: stretches an 8K-trained context up to 64K, then further during the long-context stage. |
-| `vision.image_size` | 384 | SigLIP2-So400M default. |
-| `vision.num_image_tokens` | 729 | 27×27 patch grid. |
+| `vision.image_size` | 392 | = 28 × 14; smallest size ≥ 384 that PatchEmbed accepts (asserts `image_size % patch_size == 0`). |
+| `vision.num_image_tokens` | 784 | 28×28 patch grid at 392 px / patch 14. |
 | `audio.encoder_layers` | 12 | Conformer-ish encoder; depth tuned for open-domain speech. |
 | `audio.num_audio_codes` | 4096 | Single-codebook EnCodec-style — adds 4096 entries to the LM vocab. |
 
 ## Vision tower
 
 SigLIP2-style ViT, `dim=1152`, `depth=27`, `num_heads=16`, image size
-384, patch size 14 → grid of 27×27 = 729 patch tokens. An MLP connector
+392, patch size 14 → grid of 28×28 = 784 patch tokens. An MLP connector
 (2 hidden layers, GELU activation) projects each patch into the LLM's
 8192-d embedding space.
 
@@ -94,7 +94,7 @@ Resulting frame rate: ~50 audio tokens per second of speech.
 Standard GQA KV cache at 256K with bf16:
 ```
 2 (K and V) × n_layers × n_kv_heads × head_dim × seq × 2 bytes
-= 2 × 72 × 8 × 128 × 262144 × 2 ≈ 45 GB / request
+= 2 × 81 × 8 × 128 × 262144 × 2 ≈ 51 GB / request
 ```
 
 ## How to train Aurora end to end

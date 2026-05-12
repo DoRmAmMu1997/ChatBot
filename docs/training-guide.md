@@ -63,7 +63,7 @@ Then sanity-check the model configs hit their target parameter counts:
 ```powershell
 python scripts/count_params.py --model tiny
 python scripts/count_params.py --model aurora-72b
-python scripts/count_params.py --model forge-320b
+python scripts/count_params.py --model forge-460b
 ```
 
 Building the 250B graph on CPU takes a few minutes but only happens once.
@@ -113,7 +113,7 @@ Hardware expectations:
 |--------------|--------------------|-----------------|-------|---------------------------|
 | Tiny (50M)   | 1 GPU              | 1 GPU           | 1 GPU | 1 GPU                     |
 | Aurora-72B   | 256–1024× H100     | 32–64× H100     | 8× H100 | 2–4× A100 / RTX 6000     |
-| Forge-320B   | 1024–4096× H100    | 64–128× H100    | 16× H100 | 4–8× H100 (NF4)         |
+| Forge-460B   | 1024–4096× H100    | 64–128× H100    | 16× H100 | 4–8× H100 (NF4)         |
 
 (Hours/days depending on cluster size — that's compute, not code, so we
 don't try to estimate it precisely.)
@@ -158,7 +158,7 @@ torchrun --nproc-per-node=8 scripts/dpo.py \
 
 ```bash
 torchrun --nproc-per-node=8 scripts/sft.py \
-    --model forge-320b \
+    --model forge-460b \
     --training tool-use-sft \
     --tokenizer checkpoints/forge-tokenizer.json \
     --resume-from outputs/dpo/latest

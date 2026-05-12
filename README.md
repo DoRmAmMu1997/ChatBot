@@ -9,7 +9,7 @@ before you commit to renting GPUs.
 | Model | Size | Modalities | Specialization | Context |
 |---|---|---|---|---|
 | **Aurora** | ~72 B dense | text + image + audio in, text + audio out | Omni-modal assistant (GPT-4o-class) | 256K |
-| **Forge** | ~320 B MoE / ~31 B active | text + image + audio + video + PDF in, text out (audio optional) | Coding, software engineering, DevOps (Opus-class) | 1M |
+| **Forge** | ~460 B MoE / ~35 B active | text + image + audio + video + PDF in, text out (audio optional) | Coding, software engineering, DevOps (Opus-class) | 1M |
 | **Tiny (~50 M)** | Same architectures, miniaturised | All modalities | Smoke-testing & education | 4K |
 
 ## What ships in this repo
@@ -42,7 +42,7 @@ before you commit to renting GPUs.
 ## Quick links
 
 * [`docs/architecture-aurora-72b.md`](docs/architecture-aurora-72b.md)
-* [`docs/architecture-forge-320b.md`](docs/architecture-forge-320b.md)
+* [`docs/architecture-forge-460b.md`](docs/architecture-forge-460b.md)
 * [`docs/training-guide.md`](docs/training-guide.md) — end-to-end how-to-train
 * [`docs/plugin-system.md`](docs/plugin-system.md) — Claude-Code-style runtime reference
 * [`docs/datasets.md`](docs/datasets.md) — every dataset, license, fetch instructions
@@ -59,7 +59,7 @@ chatbot/
 ├── requirements.txt
 ├── requirements-train.txt
 ├── configs/
-│   ├── models/                      # tiny, aurora-72b, forge-320b
+│   ├── models/                      # tiny, aurora-72b, forge-460b
 │   ├── training/                    # pretrain, long_context, sft, dpo, lora, tool-use-sft
 │   └── runtime/                     # default, aurora-chat, forge-coder
 ├── docs/                            # all the architecture / training / plugin docs
@@ -114,7 +114,7 @@ serious compute:
 ```powershell
 python scripts/count_params.py --model tiny
 python scripts/count_params.py --model aurora-72b
-python scripts/count_params.py --model forge-320b
+python scripts/count_params.py --model forge-460b
 ```
 
 ## Quick smoke test (no GPU required)
@@ -181,7 +181,7 @@ are very real:
 |--------------|--------------------|-----------------|--------|----------------------|
 | Tiny (~50M)  | 1 GPU              | 1 GPU           | 1 GPU  | 1 GPU                |
 | Aurora-72B   | 256–1024× H100     | 32–64× H100     | 8× H100| 2–4× A100 / RTX 6000 |
-| Forge-320B   | 1024–4096× H100    | 64–128× H100    | 16× H100 | 4–8× H100 (NF4)   |
+| Forge-460B   | 1024–4096× H100    | 64–128× H100    | 16× H100 | 4–8× H100 (NF4)   |
 
 LoRA / QLoRA paths (in `scripts/lora_finetune.py`) make continuation
 training realistic on consumer hardware.
@@ -209,7 +209,7 @@ python scripts/chat.py ... runtime.temperature=0.3
 
 ```powershell
 python scripts/agent.py `
-    --model forge-320b `
+    --model forge-460b `
     --checkpoint outputs/tool_use_sft/latest `
     --tokenizer checkpoints/forge-tokenizer.json `
     --runtime forge-coder
@@ -228,7 +228,7 @@ Working examples: [`plugins_examples/`](plugins_examples/).
 ```powershell
 python scripts/eval.py `
     --bench humaneval `
-    --model forge-320b `
+    --model forge-460b `
     --checkpoint outputs/dpo/latest `
     --tokenizer checkpoints/forge-tokenizer.json `
     --limit 164
